@@ -8,20 +8,23 @@
     "jwt.py": "4fc5366417393a91d41847cb543f18a6dcc5a99a1701f87315f32232130270cd",
     "password.py": "86c65577ed3f8196ce4bfb281fc6d5988c347529e9fd73eb6180c1d75ba4f5b6",
     "permissions_cache.py": "5218ae809e02e17bf176f685fd12919223b28e10d2fa74e7191b45ef1bd3a87f",
-    "provider.py": "c5195f0f993016a2da6111b558ecdd7edeef6c9e11ad8946bc26ee59f02cdd97",
+    "provider.py": "e15382d0f77a17f40f17f39dffb54943479f12d4e7e93aa86cebf7ffc9009bad",
     "repository.py": "1db527aa08e8c1dea8d5369c8a377198a5672052f9f067480fbb9fb9eac5dc08",
     "schema.py": "07a3237b4e2f9de6ffc0c44edc1ba31dc6c975223e8736ea2b192d2ae8ee4f16",
     "schema_registry.py": "5e3462d2ddc12fdfda3f0688cd050b1b02ed5585b1f5b2536229311c7b163cca",
     "schemas.py": "2c2fba751e607adc9dddc575d4d2c00e082234e4c8af3f835483ecba1e123655",
     "tests/__init__.py": "70600204fcb77bbc85a50a0ed1116b1a62a1cc594562589fcbf86ccd3c90af5f",
-    "tests/conftest.py": "765f43b20fbf3e0ee8d74a01428e4162a5cf5f1bd0c50d734c3f4b8b37ea9194",
+    "tests/conftest.py": "48edb2ef344037c0c4d63dadc6f0c00ddff91fc8208a0e1c00563317229d7908",
     "tests/test_auth.py": "9a4e956b678c8cf491a5bac0c2a29446d7afc09efbc6b29db3b0c7f7c347a556",
+    "tests/test_critical_scenarios.py": "37d687fe4f9b8b7bde7fa3b97614330fce215b6bd0dfd745681d6736d662545d",
+    "tests/test_integration_postgres.py": "ca4c472628e175b50342eaa3cadba9211c694d1cdfc0b3a1fe183f83b1cc7426",
     "tests/test_jwt.py": "61da022d2cfafe01c95e400042b27041d1cfdaceebf7d61bfb6dcce4244ee95f",
     "tests/test_password.py": "5ded557f8158f7c090321bd82f3a763d441b32031d11bb287331b36f9c03ced2",
+    "tests/test_phase1_logic.py": "e5a967b7938ef71418c54d6292826b8c37007441c39191f808bfed177c240fbb",
     "tests/test_provider.py": "2636bb3324d3c6312932561351da8b73c7c342f86f62b49d7ae653b07732fbd8",
     "tests/test_repository.py": "641dde70adb8f951fc48657ed2b7cc2c45672b5b95b4edbee6b83fd4a8abd856",
     "tests/test_schema_registry.py": "707529deb4b43e14efc1f3e177515cb379185dbe06f58f5416f619877140322c",
     "validators.py": "636ce38a95674eec70cf6bfe30a93824faee6e7b9e44fab76b65bc1cd7b7f508"
   },
-  "manifest_hash": "3c09228baaef547b8010b914a6f8cc098f6e1c5c0843a21b41515539a82ab165"
+  "manifest_hash": "27ee4b7230926797ffb6aff81cae6d8999de7c840ca8f03de937d13ab508dab1"
 }
