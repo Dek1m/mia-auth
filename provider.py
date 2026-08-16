@@ -1,319 +1,1002 @@
-"""Auth Provider — реализация авторизации для Mia Framework.
+"""Auth Provider — полная реализация авторизации для Mia Framework.
 
-Предоставляет:
-- Управление пользователями (CRUD)
-- Аутентификацию (login/logout)
-- Авторизацию (RBAC, permissions)
-- JWT токены
-- Шифрование паролей
+Phase 1: in-memory → PostgreSQL.
+- Пользователи, группы, роли, связи хранятся в БД
+- JWT access/refresh токены
+- argon2id для паролей с lazy rehash
+- Кеш permissions с TTL
+- Bootstrap для первого администратора
 """
 from __future__ import annotations
 
-import hashlib
-import hmac
-import os
-import secrets
-import time
+import asyncio
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from argenta_logging import get_logger
 from core.task_decorator import task
+
 from .config import AuthConfig
+from .decorators import auth_method
+from .password import hash_password, verify_password, needs_rehash
+from .jwt import (
+    create_access_token,
+    create_refresh_token,
+    validate_access_token,
+    hash_token,
+    compare_tokens,
+    TokenExpiredError,
+    TokenInvalidError,
+)
+from .repository import AuthRepository
+from .permissions_cache import PermissionsCache
+from .schema_registry import AuthSchemaRegistry
+from .schema import AUTH_CORE_SCHEMA
+from .bootstrap import AuthBootstrap
 
 log = get_logger(__name__)
 
-__all__ = ["AuthProvider"]
+__all__ = ["AuthProvider", "UserContext"]
 
 
-@dataclass
-class User:
-    """Пользователь."""
-
-    id: str
-    username: str
-    password_hash: str
-    email: str | None = None
-    roles: list[str] = field(default_factory=list)
-    permissions: list[str] = field(default_factory=list)
-    is_active: bool = True
-    created_at: float = field(default_factory=time.time)
-    last_login: float | None = None
-    login_attempts: int = 0
-    locked_until: float | None = None
-
+# ── Контекст пользователя ──────────────────────────────
 
 @dataclass
-class AuthToken:
-    """JWT токен."""
-
+class UserContext:
+    """Контекст аутентифицированного пользователя."""
     user_id: str
     username: str
-    roles: list[str]
-    permissions: list[str]
-    expires_at: float
-    issued_at: float = field(default_factory=time.time)
+    perms_version: int
 
+
+# ── Исключения ──────────────────────────────────────────
+
+class AuthError(Exception):
+    """Базовая ошибка auth-модуля."""
+
+    def __init__(self, message: str, code: str = "AUTH_ERROR") -> None:
+        self.code = code
+        super().__init__(message)
+
+
+class InvalidCredentialsError(AuthError):
+    def __init__(self) -> None:
+        super().__init__("Invalid username or password", "INVALID_CREDENTIALS")
+
+
+class AccountLockedError(AuthError):
+    def __init__(self, locked_until: datetime | None = None) -> None:
+        msg = "Account is locked"
+        if locked_until:
+            msg += f" until {locked_until.isoformat()}"
+        super().__init__(msg, "LOCKED")
+
+
+class AccountDisabledError(AuthError):
+    def __init__(self) -> None:
+        super().__init__("Account is disabled", "DISABLED")
+
+
+class ReuseDetectedError(AuthError):
+    def __init__(self) -> None:
+        super().__init__(
+            "Refresh token reuse detected — all sessions revoked", "REUSE_DETECTED"
+        )
+
+
+class NotFoundError(AuthError):
+    def __init__(self, entity: str = "Resource") -> None:
+        super().__init__(f"{entity} not found", "NOT_FOUND")
+
+
+class PermissionDeniedError(AuthError):
+    def __init__(self) -> None:
+        super().__init__("Permission denied", "PERMISSION_DENIED")
+
+
+class ForbiddenError(AuthError):
+    def __init__(self, message: str = "Forbidden") -> None:
+        super().__init__(message, "FORBIDDEN")
+
+
+# ── Провайдер ───────────────────────────────────────────
 
 class AuthProvider:
     """Провайдер авторизации.
 
     Предоставляет методы для:
     - Управления пользователями (CRUD)
-    - Аутентификации (login/logout)
+    - Аутентификации (login/logout/refresh)
     - Авторизации (RBAC, permissions)
-    - JWT токенов
-    - Шифрования паролей
+    - JWT токенов (access + refresh)
+    - Шифрования паролей (argon2id)
     """
 
-    def __init__(self, config: AuthConfig | None = None) -> None:
+    def __init__(
+        self,
+        config: AuthConfig | None = None,
+        pool: Any | None = None,
+    ) -> None:
+        """Args:
+            config: Конфигурация auth-модуля.
+            pool: asyncpg pool (если None — не используется).
+        """
         self._config = config or AuthConfig()
-        self._users: dict[str, User] = {}  # In-memory storage (для примера)
-        self._tokens: dict[str, AuthToken] = {}  # Active tokens
+        self._pool = pool
+        self._repo: AuthRepository | None = None
+        self._registry: AuthSchemaRegistry | None = None
+        self._cache: PermissionsCache | None = None
+        self._bootstrap: AuthBootstrap | None = None
 
-    # ============================================
+        if pool is not None:
+            self._repo = AuthRepository(pool)
+            self._registry = AuthSchemaRegistry(pool)
+            self._cache = PermissionsCache(ttl=self._config.perms_cache_ttl)
+            self._bootstrap = AuthBootstrap(self._repo, self._registry)
+
+    @property
+    def repository(self) -> AuthRepository | None:
+        return self._repo
+
+    @property
+    def registry(self) -> AuthSchemaRegistry | None:
+        return self._registry
+
+    @property
+    def cache(self) -> PermissionsCache | None:
+        return self._cache
+
+    # ─────────────────────────────────────────────
+    # Инициализация (вызывается из on_load)
+    # ─────────────────────────────────────────────
+
+    async def initialize(self) -> None:
+        """Зарегистрировать AUTH_CORE_SCHEMA в AuthSchemaRegistry."""
+        if self._registry is None:
+            return
+        await self._registry.register("auth", AUTH_CORE_SCHEMA, is_builtin=True)
+        log.info("Auth schema registered")
+
+    # ─────────────────────────────────────────────
     # Пользователи (CRUD)
-    # ============================================
+    # ─────────────────────────────────────────────
 
     @task(type="database", timeout=5.0)
-    def get_user(self, user_id: str) -> User | None:
+    async def get_user(self, user_id: str) -> dict[str, Any] | None:
         """Получить пользователя по ID."""
-        return self._users.get(user_id)
+        if self._repo is None:
+            raise AuthError("Auth not initialized (no DB pool)")
+        return await self._repo.get_user(user_id)
 
     @task(type="database", timeout=5.0)
-    def get_user_by_username(self, username: str) -> User | None:
+    async def get_user_by_username(self, username: str) -> dict[str, Any] | None:
         """Получить пользователя по username."""
-        for user in self._users.values():
-            if user.username == username:
-                return user
-        return None
+        if self._repo is None:
+            raise AuthError("Auth not initialized (no DB pool)")
+        return await self._repo.get_user_by_username(username)
 
     @task(type="database", timeout=5.0)
-    def create_user(
+    async def create_user(
         self,
         username: str,
         password: str,
         email: str | None = None,
-        roles: list[str] | None = None,
-    ) -> User:
+        first_name: str | None = None,
+        last_name: str | None = None,
+    ) -> dict[str, Any]:
         """Создать пользователя."""
-        # Валидация
-        if self.get_user_by_username(username):
+        if self._repo is None:
+            raise AuthError("Auth not initialized (no DB pool)")
+
+        # Проверка уникальности username
+        existing = await self._repo.get_user_by_username(username)
+        if existing:
             raise ValueError(f"User '{username}' already exists")
 
+        # Валидация пароля
         self._validate_password(password)
 
-        # Хеширование пароля
-        password_hash = self._hash_password(password)
+        # Хеширование
+        password_hashed = hash_password(password)
 
-        # Создание пользователя
-        user_id = secrets.token_hex(16)
-        user = User(
-            id=user_id,
+        user = await self._repo.create_user(
             username=username,
-            password_hash=password_hash,
+            password_hash=password_hashed,
             email=email,
-            roles=roles or ["user"],
-        )
-        self._users[user_id] = user
-
-        log.info(
-            "User created",
-            extra={"user_id": user_id, "username": username},
+            first_name=first_name,
+            last_name=last_name,
         )
 
+        log.info("User created", extra={"user_id": user["id"], "username": username})
         return user
 
     @task(type="database", timeout=5.0)
-    def update_user(self, user_id: str, data: dict[str, Any]) -> User | None:
+    async def update_user(self, user_id: str, data: dict[str, Any]) -> dict[str, Any] | None:
         """Обновить пользователя."""
-        user = self._users.get(user_id)
-        if not user:
-            return None
-
-        if "username" in data:
-            user.username = data["username"]
-        if "email" in data:
-            user.email = data["email"]
-        if "roles" in data:
-            user.roles = data["roles"]
-        if "permissions" in data:
-            user.permissions = data["permissions"]
-        if "is_active" in data:
-            user.is_active = data["is_active"]
-
-        log.info("User updated", extra={"user_id": user_id})
-
-        return user
+        if self._repo is None:
+            raise AuthError("Auth not initialized (no DB pool)")
+        result = await self._repo.update_user(user_id, data)
+        if result and self._cache:
+            self._cache.invalidate(user_id)
+        return result
 
     @task(type="database", timeout=5.0)
-    def delete_user(self, user_id: str) -> bool:
-        """Удалить пользователя."""
-        if user_id in self._users:
-            del self._users[user_id]
-            log.info("User deleted", extra={"user_id": user_id})
-            return True
-        return False
+    async def delete_user(
+        self, user_id: str, force: bool = False,
+    ) -> bool:
+        """Удалить пользователя.
 
-    # ============================================
+        Без force: запрет удаления последнего system_admin.
+        С force: каскадное удаление.
+        """
+        if self._repo is None:
+            raise AuthError("Auth not initialized (no DB pool)")
+
+        # Проверка: последний system_admin
+        user = await self._repo.get_user(user_id)
+        if not user:
+            raise NotFoundError("User")
+
+        # Проверяем, является ли пользователь system_admin
+        is_admin = await self._repo._pool.fetchval(
+            "SELECT EXISTS(SELECT 1 FROM auth.user_roles ur "
+            "JOIN auth.roles r ON r.id = ur.role_id "
+            "WHERE ur.user_id = $1 AND r.name = 'system_admin')",
+            user_id,
+        )
+        if is_admin:
+            admin_count = await self._repo.get_active_admin_count()
+            if admin_count <= 1 and not force:
+                raise ForbiddenError("Cannot delete the last system_admin (use force=True)")
+
+        # Проверка зависимостей (без force)
+        if not force:
+            groups = await self._repo.get_user_groups(user_id)
+            sessions_check = await self._repo._pool.fetchval(
+                "SELECT COUNT(*) FROM auth.auth_sessions WHERE user_id = $1",
+                user_id,
+            )
+            if groups or (sessions_check and sessions_check > 0):
+                raise ForbiddenError(
+                    "User has dependencies (groups, sessions). Use force=True to cascade."
+                )
+
+        # Каскадное удаление
+        await self._repo.revoke_all_user_sessions(user_id)
+        # Удаляем связи
+        await self._repo._pool.execute(
+            "DELETE FROM auth.user_roles WHERE user_id = $1", user_id,
+        )
+        await self._repo._pool.execute(
+            "DELETE FROM auth.user_group_membership WHERE user_id = $1", user_id,
+        )
+        await self._repo._pool.execute(
+            "DELETE FROM auth.password_history WHERE user_id = $1", user_id,
+        )
+        result = await self._repo.delete_user(user_id)
+
+        if self._cache:
+            self._cache.invalidate(user_id)
+
+        log.info("User deleted", extra={"user_id": user_id, "force": force})
+        return result
+
+    @task(type="database", timeout=5.0)
+    async def list_users(
+        self, offset: int = 0, limit: int = 100, search: str | None = None,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """Список пользователей с пагинацией."""
+        if self._repo is None:
+            raise AuthError("Auth not initialized (no DB pool)")
+        return await self._repo.list_users(offset, limit, search)
+
+    # ─────────────────────────────────────────────
+    # Состояние пользователей
+    # ─────────────────────────────────────────────
+
+    @task(type="database", timeout=5.0)
+    async def block_user(self, user_id: str, minutes: int | None = None) -> None:
+        """Заблокировать пользователя."""
+        if self._repo is None:
+            raise AuthError("Auth not initialized (no DB pool)")
+        mins = minutes or self._config.login_block_minutes
+        until = datetime.now(timezone.utc) + timedelta(minutes=mins)
+        await self._repo.block_user(user_id, until)
+        await self._repo.revoke_all_user_sessions(user_id)
+        if self._cache:
+            self._cache.invalidate(user_id)
+        log.info("User blocked", extra={"user_id": user_id, "until": until.isoformat()})
+
+    @task(type="database", timeout=5.0)
+    async def unblock_user(self, user_id: str) -> None:
+        """Разблокировать пользователя."""
+        if self._repo is None:
+            raise AuthError("Auth not initialized (no DB pool)")
+        await self._repo.unblock_user(user_id)
+        if self._cache:
+            self._cache.invalidate(user_id)
+        log.info("User unblocked", extra={"user_id": user_id})
+
+    @task(type="database", timeout=5.0)
+    async def disable_user(self, user_id: str) -> None:
+        """Деактивировать пользователя."""
+        if self._repo is None:
+            raise AuthError("Auth not initialized (no DB pool)")
+        await self._repo.disable_user(user_id)
+        await self._repo.revoke_all_user_sessions(user_id)
+        if self._cache:
+            self._cache.invalidate(user_id)
+        log.info("User disabled", extra={"user_id": user_id})
+
+    @task(type="database", timeout=5.0)
+    async def enable_user(self, user_id: str) -> None:
+        """Активировать пользователя."""
+        if self._repo is None:
+            raise AuthError("Auth not initialized (no DB pool)")
+        await self._repo.enable_user(user_id)
+        if self._cache:
+            self._cache.invalidate(user_id)
+        log.info("User enabled", extra={"user_id": user_id})
+
+    # ─────────────────────────────────────────────
+    # Пароли
+    # ─────────────────────────────────────────────
+
+    @task(type="database", timeout=5.0)
+    async def set_password(self, user_id: str, password: str) -> None:
+        """Установить пароль пользователю.
+
+        Сохраняет в историю паролей и проверяет на дубликат.
+        """
+        if self._repo is None:
+            raise AuthError("Auth not initialized (no DB pool)")
+
+        self._validate_password(password)
+        new_hash = hash_password(password)
+
+        # Проверка истории
+        is_reused = await self._repo.check_password_history(
+            user_id, new_hash, self._config.password_history_size,
+        )
+        if is_reused:
+            raise ForbiddenError("Password was recently used")
+
+        await self._repo.set_password_hash(user_id, new_hash)
+        await self._repo.save_password_history(user_id, new_hash)
+        await self._repo.prune_password_history(user_id, self._config.password_history_size)
+
+        log.info("Password changed", extra={"user_id": user_id})
+
+    # ─────────────────────────────────────────────
     # Аутентификация
-    # ============================================
+    # ─────────────────────────────────────────────
 
     @task(type="database", timeout=5.0)
-    def login(self, username: str, password: str) -> AuthToken | None:
-        """Аутентификация пользователя."""
-        user = self.get_user_by_username(username)
+    async def login(
+        self,
+        username: str,
+        password: str,
+        user_agent: str | None = None,
+        ip: str | None = None,
+    ) -> dict[str, Any]:
+        """Аутентификация пользователя.
+
+        Returns:
+            {"access_token": str, "refresh_token": str, "user_id": str, "username": str}
+
+        Raises:
+            InvalidCredentialsError: Неверный логин/пароль.
+            AccountLockedError: Аккаунт заблокирован.
+            AccountDisabledError: Аккаунт деактивирован.
+        """
+        if self._repo is None:
+            raise AuthError("Auth not initialized (no DB pool)")
+
+        user = await self._repo.get_user_by_username(username)
         if not user:
-            log.warning("Login failed: user not found", extra={"username": username})
-            return None
+            raise InvalidCredentialsError()
+
+        # Проверка деактивации
+        if user.get("is_disabled"):
+            raise AccountDisabledError()
 
         # Проверка блокировки
-        if user.locked_until and time.time() < user.locked_until:
-            log.warning(
-                "Login failed: account locked",
-                extra={"username": username, "locked_until": user.locked_until},
-            )
-            return None
+        locked_until = user.get("locked_until")
+        if locked_until:
+            if isinstance(locked_until, str):
+                locked_until = datetime.fromisoformat(locked_until)
+            if locked_until > datetime.now(timezone.utc):
+                raise AccountLockedError(locked_until)
+            # Блокировка истекла — разблокируем
+            await self._repo.unblock_user(user["id"])
 
         # Проверка пароля
-        if not self._verify_password(password, user.password_hash):
-            user.login_attempts += 1
-            if user.login_attempts >= self._config.max_login_attempts:
-                user.locked_until = time.time() + (
-                    self._config.lockout_duration_minutes * 60
+        ok, new_hash = verify_password(password, user["password_hash"])
+        if not ok:
+            attempts = await self._repo.record_login_failure(user["id"])
+            if attempts >= self._config.login_attempts_limit:
+                until = datetime.now(timezone.utc) + timedelta(
+                    minutes=self._config.login_block_minutes,
                 )
+                await self._repo.block_user(user["id"], until)
                 log.warning(
                     "Account locked due to too many attempts",
-                    extra={"username": username, "attempts": user.login_attempts},
+                    extra={"username": username, "attempts": attempts},
                 )
-            return None
+            raise InvalidCredentialsError()
 
-        # Успешный вход
-        user.login_attempts = 0
-        user.locked_until = None
-        user.last_login = time.time()
+        # Lazy rehash
+        if new_hash:
+            await self._repo.set_password_hash(user["id"], new_hash)
+            await self._repo.save_password_history(user["id"], new_hash)
+            await self._repo.prune_password_history(
+                user["id"], self._config.password_history_size,
+            )
 
-        # Создание токена
-        token = self._create_token(user)
+        # Успешный вход — сброс счётчика
+        await self._repo.reset_login_failures(user["id"])
+        await self._repo.set_last_login(user["id"])
+
+        # Версия прав
+        perms_version = await self._repo.get_permissions_version(user["id"])
+
+        # Создание токенов
+        access_token = create_access_token(
+            user_id=user["id"],
+            username=user["username"],
+            perms_version=perms_version,
+            secret=self._config.jwt_secret,
+            algorithm=self._config.jwt_algorithm,
+            expires_in_minutes=self._config.jwt_access_expiration_minutes,
+        )
+        refresh_token = create_refresh_token()
+        family_id = str(uuid.uuid4())
+
+        # Сохранение сессии
+        access_hash_val = hash_token(access_token)
+        refresh_hash_val = hash_token(refresh_token)
+        access_expires = datetime.now(timezone.utc) + timedelta(
+            minutes=self._config.jwt_access_expiration_minutes,
+        )
+        refresh_expires = datetime.now(timezone.utc) + timedelta(
+            days=self._config.jwt_refresh_expiration_days,
+        )
+
+        await self._repo.create_session(
+            user_id=user["id"],
+            access_hash=access_hash_val,
+            access_expires_at=access_expires,
+            refresh_hash=refresh_hash_val,
+            refresh_expires_at=refresh_expires,
+            user_agent=user_agent,
+            ip_address=ip,
+            family_id=family_id,
+        )
 
         log.info(
             "User logged in",
-            extra={"user_id": user.id, "username": username},
+            extra={"user_id": user["id"], "username": username},
         )
 
-        return token
+        return {
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "user_id": user["id"],
+            "username": user["username"],
+        }
 
     @task(type="database", timeout=5.0)
-    def logout(self, token: AuthToken) -> bool:
-        """Выход пользователя."""
-        token_key = f"{token.user_id}:{token.issued_at}"
-        if token_key in self._tokens:
-            del self._tokens[token_key]
-            log.info("User logged out", extra={"user_id": token.user_id})
+    async def refresh_token(
+        self,
+        refresh_token: str,
+        user_agent: str | None = None,
+        ip: str | None = None,
+    ) -> dict[str, str]:
+        """Обновить access token через refresh token.
+
+        Обнаружение reuse: если last_used_at уже установлен —
+        семья токенов скомпрометирована, все сессии отзываются.
+
+        Returns:
+            {"access_token": str, "refresh_token": str}
+
+        Raises:
+            ReuseDetectedError: Обнаружено повторное использование refresh token.
+            AuthError: Сессия не найдена или истекла.
+        """
+        if self._repo is None:
+            raise AuthError("Auth not initialized (no DB pool)")
+
+        refresh_hash_val = hash_token(refresh_token)
+        session = await self._repo.get_session_by_refresh(refresh_hash_val)
+
+        if not session:
+            raise AuthError("Invalid or expired refresh token")
+
+        # Reuse detection
+        last_used = session.get("last_used_at")
+        if last_used is not None:
+            # Refresh token был использован повторно — компрометация
+            family_id = session.get("family_id")
+            if family_id:
+                await self._repo.revoke_family(family_id)
+            log.warning(
+                "Refresh token reuse detected",
+                extra={"session_id": session["id"], "user_id": session["user_id"]},
+            )
+            raise ReuseDetectedError()
+
+        # Проверка срока действия
+        refresh_expires = session.get("refresh_expires_at")
+        if isinstance(refresh_expires, str):
+            refresh_expires = datetime.fromisoformat(refresh_expires)
+        if refresh_expires and refresh_expires < datetime.now(timezone.utc):
+            raise AuthError("Refresh token has expired")
+
+        # Проверка пользователя
+        user = await self._repo.get_user(session["user_id"])
+        if not user or not user.get("is_active") or user.get("is_disabled"):
+            raise AuthError("User account is not available")
+
+        # Проверка блокировки
+        locked_until = user.get("locked_until")
+        if locked_until:
+            if isinstance(locked_until, str):
+                locked_until = datetime.fromisoformat(locked_until)
+            if locked_until and locked_until > datetime.now(timezone.utc):
+                raise AccountLockedError(locked_until)
+
+        # Отзываем старую сессию
+        await self._repo.revoke_session(session["id"])
+
+        # Создаём новую сессию с тем же family_id
+        perms_version = await self._repo.get_permissions_version(user["id"])
+        new_access_token = create_access_token(
+            user_id=user["id"],
+            username=user["username"],
+            perms_version=perms_version,
+            secret=self._config.jwt_secret,
+            algorithm=self._config.jwt_algorithm,
+            expires_in_minutes=self._config.jwt_access_expiration_minutes,
+        )
+        new_refresh_token = create_refresh_token()
+
+        new_access_hash = hash_token(new_access_token)
+        new_refresh_hash = hash_token(new_refresh_token)
+        access_expires = datetime.now(timezone.utc) + timedelta(
+            minutes=self._config.jwt_access_expiration_minutes,
+        )
+        refresh_expires_at = datetime.now(timezone.utc) + timedelta(
+            days=self._config.jwt_refresh_expiration_days,
+        )
+
+        await self._repo.create_session(
+            user_id=user["id"],
+            access_hash=new_access_hash,
+            access_expires_at=access_expires,
+            refresh_hash=new_refresh_hash,
+            refresh_expires_at=refresh_expires_at,
+            user_agent=user_agent,
+            ip_address=ip,
+            family_id=session.get("family_id"),
+        )
+
+        return {
+            "access_token": new_access_token,
+            "refresh_token": new_refresh_token,
+        }
+
+    @task(type="database", timeout=5.0)
+    async def logout(self, refresh_token: str) -> bool:
+        """Выход пользователя — отзыв сессии по refresh token."""
+        if self._repo is None:
+            raise AuthError("Auth not initialized (no DB pool)")
+
+        refresh_hash_val = hash_token(refresh_token)
+        session = await self._repo.get_session_by_refresh(refresh_hash_val)
+        if not session:
+            return False
+
+        await self._repo.revoke_session(session["id"])
+        log.info("User logged out", extra={"user_id": session["user_id"]})
+        return True
+
+    # ─────────────────────────────────────────────
+    # Авторизация
+    # ─────────────────────────────────────────────
+
+    @task(type="database", timeout=5.0)
+    async def validate_token(self, access_token: str) -> UserContext | None:
+        """Валидировать access token и вернуть контекст пользователя.
+
+        Returns:
+            UserContext или None если невалиден.
+        """
+        if self._repo is None:
+            return None
+
+        try:
+            payload = validate_access_token(
+                access_token,
+                self._config.jwt_secret,
+                self._config.jwt_algorithm,
+            )
+        except (TokenExpiredError, TokenInvalidError):
+            return None
+
+        user_id = payload.get("sub")
+        if not user_id:
+            return None
+
+        # Проверяем сессию в БД
+        access_hash_val = hash_token(access_token)
+        session = await self._repo.get_session_by_access(access_hash_val)
+        if not session:
+            return None
+
+        # Проверяем пользователя
+        user = await self._repo.get_user(user_id)
+        if not user or not user.get("is_active") or user.get("is_disabled"):
+            return None
+
+        locked_until = user.get("locked_until")
+        if locked_until:
+            if isinstance(locked_until, str):
+                locked_until = datetime.fromisoformat(locked_until)
+            if locked_until and locked_until > datetime.now(timezone.utc):
+                return None
+
+        # Обновляем last_used_at
+        await self._repo.update_session_last_used(session["id"])
+
+        return UserContext(
+            user_id=user_id,
+            username=user["username"],
+            perms_version=payload.get("perms_version", 0),
+        )
+
+    @task(type="database", timeout=5.0)
+    async def check_permission(self, user_id: str, permission: str) -> bool:
+        """Проверить разрешение пользователя.
+
+        Поддержка wildcard: *:* и resource:*
+        """
+        if self._repo is None or self._cache is None:
+            return False
+
+        # Проверяем пользователя
+        user = await self._repo.get_user(user_id)
+        if not user or not user.get("is_active") or user.get("is_disabled"):
+            return False
+
+        # Кеш
+        current_version = await self._repo.get_permissions_version(user_id)
+        cached = self._cache.get(user_id)
+        if cached is not None:
+            cached_version, cached_perms = cached
+            if cached_version == current_version:
+                return self._check_permission_set(cached_perms, permission)
+
+        # Загружаем из БД
+        perms = await self._repo.get_user_effective_permissions(user_id)
+        self._cache.set(user_id, current_version, perms)
+
+        return self._check_permission_set(perms, permission)
+
+    def _check_permission_set(self, perms: frozenset[str], permission: str) -> bool:
+        """Проверить permission в наборе с поддержкой wildcard."""
+        # Точное совпадение
+        if permission in perms:
             return True
+
+        # Wildcard *:* — полный доступ
+        if "*:*" in perms:
+            return True
+
+        # Wildcard resource:*
+        if ":" in permission:
+            resource, _ = permission.split(":", 1)
+            wildcard = f"{resource}:*"
+            if wildcard in perms:
+                return True
+
         return False
 
-    # ============================================
-    # Авторизация
-    # ============================================
+    # ─────────────────────────────────────────────
+    # Группы
+    # ─────────────────────────────────────────────
 
     @task(type="database", timeout=5.0)
-    def authorize(self, token: AuthToken, permission: str) -> bool:
-        """Проверить разрешение."""
-        # Проверка срока действия
-        if time.time() > token.expires_at:
-            return False
-
-        # Проверка разрешения
-        return permission in token.permissions
-
-    @task(type="database", timeout=5.0)
-    def has_role(self, token: AuthToken, role: str) -> bool:
-        """Проверить роль."""
-        return role in token.roles
+    async def create_group(
+        self, name: str, description: str | None = None,
+    ) -> dict[str, Any]:
+        """Создать группу."""
+        if self._repo is None:
+            raise AuthError("Auth not initialized (no DB pool)")
+        return await self._repo.create_group(name, description)
 
     @task(type="database", timeout=5.0)
-    def check_permission(self, user_id: str, permission: str) -> bool:
-        """Проверить разрешение пользователя (без токена)."""
-        user = self._users.get(user_id)
-        if not user or not user.is_active:
-            return False
-        return permission in user.permissions
+    async def update_group(self, group_id: str, data: dict[str, Any]) -> dict[str, Any] | None:
+        """Обновить группу."""
+        if self._repo is None:
+            raise AuthError("Auth not initialized (no DB pool)")
+        return await self._repo.update_group(group_id, data)
 
-    # ============================================
-    # JWT
-    # ============================================
+    @task(type="database", timeout=5.0)
+    async def delete_group(self, group_id: str, force: bool = False) -> bool:
+        """Удалить группу.
 
-    def _create_token(self, user: User) -> AuthToken:
-        """Создать JWT токен."""
-        expires_at = time.time() + (self._config.jwt_expiration_hours * 3600)
+        Без force: ошибка если есть зависимости.
+        С force: каскадное удаление.
+        """
+        if self._repo is None:
+            raise AuthError("Auth not initialized (no DB pool)")
 
-        token = AuthToken(
-            user_id=user.id,
-            username=user.username,
-            roles=user.roles,
-            permissions=user.permissions,
-            expires_at=expires_at,
+        if not force:
+            deps = await self._repo.count_group_dependencies(group_id)
+            total = sum(deps.values())
+            if total > 0:
+                raise ForbiddenError(
+                    f"Group has dependencies: {deps}. Use force=True to cascade."
+                )
+
+        # Каскадное удаление
+        await self._repo._pool.execute(
+            "DELETE FROM auth.user_group_membership WHERE group_id = $1", group_id,
         )
-
-        # Сохраняем токен
-        token_key = f"{user.id}:{token.issued_at}"
-        self._tokens[token_key] = token
-
-        return token
-
-    def validate_token(self, token: AuthToken) -> bool:
-        """Проверить валидность токена."""
-        # Проверка срока действия
-        if time.time() > token.expires_at:
-            return False
-
-        # Проверка وجود в списке активных
-        token_key = f"{token.user_id}:{token.issued_at}"
-        return token_key in self._tokens
-
-    # ============================================
-    # Шифрование паролей
-    # ============================================
-
-    def _hash_password(self, password: str) -> str:
-        """Хешировать пароль (PBKDF2)."""
-        salt = secrets.token_hex(16)
-        key = hashlib.pbkdf2_hmac(
-            "sha256",
-            password.encode(),
-            salt.encode(),
-            iterations=100000,
+        await self._repo._pool.execute(
+            "DELETE FROM auth.group_group_membership "
+            "WHERE parent_group_id = $1 OR child_group_id = $1",
+            group_id,
         )
-        return f"{salt}:{key.hex()}"
+        await self._repo._pool.execute(
+            "DELETE FROM auth.group_roles WHERE group_id = $1", group_id,
+        )
+        return await self._repo.delete_group(group_id)
 
-    def _verify_password(self, password: str, password_hash: str) -> bool:
-        """Проверить пароль."""
-        try:
-            salt, key_hex = password_hash.split(":")
-            key = hashlib.pbkdf2_hmac(
-                "sha256",
-                password.encode(),
-                salt.encode(),
-                iterations=100000,
-            )
-            return hmac.compare_digest(key.hex(), key_hex)
-        except (ValueError, AttributeError):
+    @task(type="database", timeout=5.0)
+    async def list_groups(
+        self, offset: int = 0, limit: int = 100,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """Список групп с пагинацией."""
+        if self._repo is None:
+            raise AuthError("Auth not initialized (no DB pool)")
+        return await self._repo.list_users(offset, limit)
+
+    @task(type="database", timeout=5.0)
+    async def add_user_to_group(self, user_id: str, group_id: str, added_by: str | None = None) -> None:
+        """Добавить пользователя в группу."""
+        if self._repo is None:
+            raise AuthError("Auth not initialized (no DB pool)")
+        await self._repo.add_user_to_group(user_id, group_id, added_by)
+
+    @task(type="database", timeout=5.0)
+    async def remove_user_from_group(self, user_id: str, group_id: str) -> None:
+        """Удалить пользователя из группы."""
+        if self._repo is None:
+            raise AuthError("Auth not initialized (no DB pool)")
+        await self._repo.remove_user_from_group(user_id, group_id)
+
+    @task(type="database", timeout=5.0)
+    async def get_user_groups(self, user_id: str) -> list[dict[str, Any]]:
+        """Получить группы пользователя."""
+        if self._repo is None:
+            raise AuthError("Auth not initialized (no DB pool)")
+        return await self._repo.get_user_groups(user_id)
+
+    @task(type="database", timeout=5.0)
+    async def add_group_to_group(self, parent_id: str, child_id: str) -> None:
+        """Добавить дочернюю группу к родительской."""
+        if self._repo is None:
+            raise AuthError("Auth not initialized (no DB pool)")
+        await self._repo.add_group_to_group(parent_id, child_id)
+
+    @task(type="database", timeout=5.0)
+    async def remove_group_from_group(self, parent_id: str, child_id: str) -> None:
+        """Удалить дочернюю группу."""
+        if self._repo is None:
+            raise AuthError("Auth not initialized (no DB pool)")
+        await self._repo.remove_group_from_group(parent_id, child_id)
+
+    # ─────────────────────────────────────────────
+    # Роли
+    # ─────────────────────────────────────────────
+
+    @task(type="database", timeout=5.0)
+    async def create_role(
+        self, name: str, description: str | None = None, is_builtin: bool = False,
+    ) -> dict[str, Any]:
+        """Создать роль."""
+        if self._repo is None:
+            raise AuthError("Auth not initialized (no DB pool)")
+        return await self._repo.create_role(name, description, is_builtin)
+
+    @task(type="database", timeout=5.0)
+    async def update_role(self, role_id: str, data: dict[str, Any]) -> dict[str, Any] | None:
+        """Обновить роль."""
+        if self._repo is None:
+            raise AuthError("Auth not initialized (no DB pool)")
+        return await self._repo.update_role(role_id, data)
+
+    @task(type="database", timeout=5.0)
+    async def delete_role(self, role_id: str, force: bool = False) -> bool:
+        """Удалить роль.
+
+        Без force: ошибка если есть назначения.
+        С force: каскадное удаление.
+        """
+        if self._repo is None:
+            raise AuthError("Auth not initialized (no DB pool)")
+
+        if not force:
+            deps = await self._repo.count_role_assignments(role_id)
+            total = sum(deps.values())
+            if total > 0:
+                raise ForbiddenError(
+                    f"Role has assignments: {deps}. Use force=True to cascade."
+                )
+
+        # Каскадное удаление
+        await self._repo._pool.execute(
+            "DELETE FROM auth.user_roles WHERE role_id = $1", role_id,
+        )
+        await self._repo._pool.execute(
+            "DELETE FROM auth.group_roles WHERE role_id = $1", role_id,
+        )
+        await self._repo._pool.execute(
+            "DELETE FROM auth.role_permissions WHERE role_id = $1", role_id,
+        )
+        result = await self._repo.delete_role(role_id)
+        if self._cache:
+            self._cache.invalidate_all()
+        return result
+
+    @task(type="database", timeout=5.0)
+    async def list_roles(
+        self, offset: int = 0, limit: int = 100,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """Список ролей с пагинацией."""
+        if self._repo is None:
+            raise AuthError("Auth not initialized (no DB pool)")
+        return await self._repo.list_roles(offset, limit)
+
+    @task(type="database", timeout=5.0)
+    async def assign_role_to_user(
+        self, user_id: str, role_id: str, granted_by: str | None = None,
+    ) -> None:
+        """Назначить роль пользователю."""
+        if self._repo is None:
+            raise AuthError("Auth not initialized (no DB pool)")
+        await self._repo.assign_role_to_user(user_id, role_id, granted_by)
+        if self._cache:
+            self._cache.invalidate(user_id)
+
+    @task(type="database", timeout=5.0)
+    async def remove_role_from_user(self, user_id: str, role_id: str) -> None:
+        """Убрать роль у пользователя."""
+        if self._repo is None:
+            raise AuthError("Auth not initialized (no DB pool)")
+        await self._repo.remove_role_from_user(user_id, role_id)
+        if self._cache:
+            self._cache.invalidate(user_id)
+
+    @task(type="database", timeout=5.0)
+    async def get_user_roles(self, user_id: str) -> list[dict[str, Any]]:
+        """Получить прямые роли пользователя."""
+        if self._repo is None:
+            raise AuthError("Auth not initialized (no DB pool)")
+        return await self._repo.get_user_roles(user_id)
+
+    @task(type="database", timeout=5.0)
+    async def assign_role_to_group(self, group_id: str, role_id: str) -> None:
+        """Назначить роль группе."""
+        if self._repo is None:
+            raise AuthError("Auth not initialized (no DB pool)")
+        await self._repo.assign_role_to_group(group_id, role_id)
+        if self._cache:
+            self._cache.invalidate_all()
+
+    @task(type="database", timeout=5.0)
+    async def remove_role_from_group(self, group_id: str, role_id: str) -> None:
+        """Убрать роль у группы."""
+        if self._repo is None:
+            raise AuthError("Auth not initialized (no DB pool)")
+        await self._repo.remove_role_from_group(group_id, role_id)
+        if self._cache:
+            self._cache.invalidate_all()
+
+    @task(type="database", timeout=5.0)
+    async def get_group_roles(self, group_id: str) -> list[dict[str, Any]]:
+        """Получить роли группы."""
+        if self._repo is None:
+            raise AuthError("Auth not initialized (no DB pool)")
+        return await self._repo.get_group_roles(group_id)
+
+    @task(type="database", timeout=5.0)
+    async def inspect_role(self, role_id: str) -> dict[str, Any] | None:
+        """Получить роль с её permissions."""
+        if self._repo is None:
+            raise AuthError("Auth not initialized (no DB pool)")
+        role = await self._repo.get_role(role_id)
+        if not role:
+            return None
+        perms = await self._repo._pool.fetch(
+            "SELECT p.name, p.description FROM auth.role_permissions rp "
+            "JOIN auth.permissions p ON p.id = rp.permission_id "
+            "WHERE rp.role_id = $1",
+            role_id,
+        )
+        role["permissions"] = [dict(p) for p in perms]
+        return role
+
+    # ─────────────────────────────────────────────
+    # Эффективные права
+    # ─────────────────────────────────────────────
+
+    @task(type="database", timeout=5.0)
+    async def get_user_effective_roles(self, user_id: str) -> list[dict[str, Any]]:
+        """Получить все эффективные роли (прямые + через группы)."""
+        if self._repo is None:
+            raise AuthError("Auth not initialized (no DB pool)")
+        return await self._repo.get_user_effective_roles(user_id)
+
+    @task(type="database", timeout=5.0)
+    async def get_user_effective_permissions(self, user_id: str) -> frozenset[str]:
+        """Получить все эффективные permissions."""
+        if self._repo is None:
+            raise AuthError("Auth not initialized (no DB pool)")
+        return await self._repo.get_user_effective_permissions(user_id)
+
+    # ─────────────────────────────────────────────
+    # Bootstrap
+    # ─────────────────────────────────────────────
+
+    @task(type="database", timeout=5.0)
+    @auth_method(
+        name="needs_bootstrap",
+        description="Проверить, нужен ли bootstrap (нет system_admin)",
+        args={},
+        return_type="bool",
+        public=True,
+    )
+    async def needs_bootstrap(self) -> bool:
+        """Проверить, нужен ли bootstrap."""
+        if self._bootstrap is None:
             return False
+        return await self._bootstrap.needs_bootstrap()
+
+    @task(type="database", timeout=5.0)
+    @auth_method(
+        name="bootstrap",
+        description="Создать первого системного администратора",
+        args={"username": "str", "password": "str", "email": "str"},
+        return_type="dict",
+        public=True,
+    )
+    async def bootstrap(
+        self, username: str, password: str, email: str | None = None,
+    ) -> dict[str, Any]:
+        """Создать первого системного администратора."""
+        if self._bootstrap is None:
+            raise AuthError("Auth not initialized (no DB pool)")
+        return await self._bootstrap.bootstrap(username, password, email)
+
+    # ─────────────────────────────────────────────
+    # Приватные методы
+    # ─────────────────────────────────────────────
 
     def _validate_password(self, password: str) -> None:
-        """Валидация пароля."""
+        """Валидация пароля по политике."""
         if len(password) < self._config.password_min_length:
             raise ValueError(
                 f"Password must be at least {self._config.password_min_length} characters"
             )
-
         if self._config.password_require_uppercase and not any(
             c.isupper() for c in password
         ):
             raise ValueError("Password must contain at least one uppercase letter")
-
         if self._config.password_require_digit and not any(
             c.isdigit() for c in password
         ):
