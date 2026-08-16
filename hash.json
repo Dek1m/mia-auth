@@ -1,0 +1,11 @@
+{
+  "version": "1.0.0",
+  "files": {
+    "__init__.py": "e8eab65cae4ed9f655eaab54445b467c94175463108501aaa9fe73f58296ffbe",
+    "config.py": "2de892125dec7fdbead3527bf4b44d6cbaa14e8eb25fded01563370864b3c35a",
+    "provider.py": "d7b998fb567690bec45857b2db6efd6d4f0213cdbf2d304cb9d066d030ee8c03",
+    "tests/test_auth.py": "33499e587a5e1090afabf687757d7f680e037cee6e10bd1a7639a3062ccbee10",
+    "validators.py": "636ce38a95674eec70cf6bfe30a93824faee6e7b9e44fab76b65bc1cd7b7f508"
+  },
+  "manifest_hash": "5f2c338efe4c9052a8b2e52199988be0cfcdb23a3ef10a7b24371b0c56ccb67d"
+}
