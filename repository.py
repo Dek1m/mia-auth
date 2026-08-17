@@ -25,7 +25,7 @@ class AuthRepository:
 
     async def _fetchrow(self, query: str, *params: Any) -> dict[str, Any] | None:
         """Получить одну строку или None (аналог pool.fetchrow)."""
-        rows = await self._database.fetch(query, *params)
+        rows = self._database.fetch(query, *params)
         return dict(rows[0]) if rows else None
 
     async def _fetchval(self, query: str, *params: Any) -> Any:
@@ -33,7 +33,7 @@ class AuthRepository:
 
         Работает для запросов с единственным столбцом: COUNT(*), EXISTS, MAX и т.д.
         """
-        rows = await self._database.fetch(query, *params)
+        rows = self._database.fetch(query, *params)
         if not rows:
             return None
         first = rows[0]
@@ -102,7 +102,7 @@ class AuthRepository:
 
     async def delete_user(self, user_id: str) -> bool:
         """Удалить пользователя."""
-        result = await self._database.execute(
+        result = self._database.execute(
             "DELETE FROM auth.users WHERE id = $1", user_id,
         )
         return result == "DELETE 1"
@@ -129,7 +129,7 @@ class AuthRepository:
         )
 
         params.extend([limit, offset])
-        rows = await self._database.fetch(
+        rows = self._database.fetch(
             f"SELECT * FROM auth.users {where} ORDER BY created_at DESC "
             f"LIMIT ${len(params) - 1} OFFSET ${len(params)}",
             *params,
@@ -151,13 +151,13 @@ class AuthRepository:
 
     async def block_user(self, user_id: str, until: Any) -> None:
         """Заблокировать пользователя до указанного времени."""
-        await self._database.execute(
+        self._database.execute(
             "UPDATE auth.users SET locked_until = $1 WHERE id = $2", until, user_id,
         )
 
     async def unblock_user(self, user_id: str) -> None:
         """Разблокировать пользователя."""
-        await self._database.execute(
+        self._database.execute(
             "UPDATE auth.users SET locked_until = NULL, login_attempts = 0 WHERE id = $1",
             user_id,
         )
@@ -165,7 +165,7 @@ class AuthRepository:
     async def disable_user(self, user_id: str) -> None:
         """Деактивировать пользователя."""
         from datetime import datetime, timezone
-        await self._database.execute(
+        self._database.execute(
             "UPDATE auth.users SET is_disabled = TRUE, disabled_at = $1, is_active = FALSE "
             "WHERE id = $2",
             datetime.now(timezone.utc), user_id,
@@ -174,7 +174,7 @@ class AuthRepository:
     async def enable_user(self, user_id: str) -> None:
         """Активировать пользователя."""
         from datetime import datetime, timezone
-        await self._database.execute(
+        self._database.execute(
             "UPDATE auth.users SET is_disabled = FALSE, enabled_at = $1, is_active = TRUE "
             "WHERE id = $2",
             datetime.now(timezone.utc), user_id,
@@ -191,7 +191,7 @@ class AuthRepository:
 
     async def reset_login_failures(self, user_id: str) -> None:
         """Сбросить счётчик попыток входа."""
-        await self._database.execute(
+        self._database.execute(
             "UPDATE auth.users SET login_attempts = 0, locked_until = NULL WHERE id = $1",
             user_id,
         )
@@ -199,14 +199,14 @@ class AuthRepository:
     async def set_last_login(self, user_id: str) -> None:
         """Установить время последнего входа."""
         from datetime import datetime, timezone
-        await self._database.execute(
+        self._database.execute(
             "UPDATE auth.users SET last_login = $1 WHERE id = $2",
             datetime.now(timezone.utc), user_id,
         )
 
     async def set_password_hash(self, user_id: str, password_hash: str) -> None:
         """Установить хеш пароля."""
-        await self._database.execute(
+        self._database.execute(
             "UPDATE auth.users SET password_hash = $1 WHERE id = $2",
             password_hash, user_id,
         )
@@ -230,14 +230,14 @@ class AuthRepository:
 
     async def save_password_history(self, user_id: str, password_hash: str) -> None:
         """Сохранить хеш в историю паролей."""
-        await self._database.execute(
+        self._database.execute(
             "INSERT INTO auth.password_history (user_id, password_hash) VALUES ($1, $2)",
             user_id, password_hash,
         )
 
     async def prune_password_history(self, user_id: str, keep: int = 10) -> None:
         """Оставить только последние N записей истории."""
-        await self._database.execute(
+        self._database.execute(
             "DELETE FROM auth.password_history "
             "WHERE user_id = $1 AND id NOT IN ("
             "  SELECT id FROM auth.password_history "
@@ -287,7 +287,7 @@ class AuthRepository:
 
     async def delete_group(self, group_id: str) -> bool:
         """Удалить группу."""
-        result = await self._database.execute(
+        result = self._database.execute(
             "DELETE FROM auth.groups WHERE id = $1", group_id,
         )
         return result == "DELETE 1"
@@ -297,7 +297,7 @@ class AuthRepository:
     ) -> tuple[list[dict[str, Any]], int]:
         """Список групп с пагинацией."""
         total = await self._fetchval("SELECT COUNT(*) FROM auth.groups")
-        rows = await self._database.fetch(
+        rows = self._database.fetch(
             "SELECT * FROM auth.groups ORDER BY name LIMIT $1 OFFSET $2",
             limit, offset,
         )
@@ -305,7 +305,7 @@ class AuthRepository:
 
     async def get_group_members(self, group_id: str) -> list[dict[str, Any]]:
         """Получить участников группы."""
-        rows = await self._database.fetch(
+        rows = self._database.fetch(
             "SELECT u.id, u.username, u.email, ugm.added_at, ugm.added_by "
             "FROM auth.user_group_membership ugm "
             "JOIN auth.users u ON u.id = ugm.user_id "
@@ -375,7 +375,7 @@ class AuthRepository:
 
     async def delete_role(self, role_id: str) -> bool:
         """Удалить роль."""
-        result = await self._database.execute(
+        result = self._database.execute(
             "DELETE FROM auth.roles WHERE id = $1", role_id,
         )
         return result == "DELETE 1"
@@ -385,7 +385,7 @@ class AuthRepository:
     ) -> tuple[list[dict[str, Any]], int]:
         """Список ролей с пагинацией."""
         total = await self._fetchval("SELECT COUNT(*) FROM auth.roles")
-        rows = await self._database.fetch(
+        rows = self._database.fetch(
             "SELECT * FROM auth.roles ORDER BY name LIMIT $1 OFFSET $2",
             limit, offset,
         )
@@ -409,7 +409,7 @@ class AuthRepository:
         self, user_id: str, group_id: str, added_by: str | None = None,
     ) -> None:
         """Добавить пользователя в группу."""
-        await self._database.execute(
+        self._database.execute(
             "INSERT INTO auth.user_group_membership (user_id, group_id, added_by) "
             "VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
             user_id, group_id, added_by,
@@ -417,14 +417,14 @@ class AuthRepository:
 
     async def remove_user_from_group(self, user_id: str, group_id: str) -> None:
         """Удалить пользователя из группы."""
-        await self._database.execute(
+        self._database.execute(
             "DELETE FROM auth.user_group_membership WHERE user_id = $1 AND group_id = $2",
             user_id, group_id,
         )
 
     async def get_user_groups(self, user_id: str) -> list[dict[str, Any]]:
         """Получить группы пользователя."""
-        rows = await self._database.fetch(
+        rows = self._database.fetch(
             "SELECT g.id, g.name, g.description, g.is_builtin, ugm.added_at "
             "FROM auth.user_group_membership ugm "
             "JOIN auth.groups g ON g.id = ugm.group_id "
@@ -439,7 +439,7 @@ class AuthRepository:
 
     async def add_group_to_group(self, parent_group_id: str, child_group_id: str) -> None:
         """Добавить дочернюю группу к родительской."""
-        await self._database.execute(
+        self._database.execute(
             "INSERT INTO auth.group_group_membership (parent_group_id, child_group_id) "
             "VALUES ($1, $2) ON CONFLICT DO NOTHING",
             parent_group_id, child_group_id,
@@ -447,7 +447,7 @@ class AuthRepository:
 
     async def remove_group_from_group(self, parent_group_id: str, child_group_id: str) -> None:
         """Удалить дочернюю группу из родительской."""
-        await self._database.execute(
+        self._database.execute(
             "DELETE FROM auth.group_group_membership "
             "WHERE parent_group_id = $1 AND child_group_id = $2",
             parent_group_id, child_group_id,
@@ -459,7 +459,7 @@ class AuthRepository:
 
     async def assign_role_to_group(self, group_id: str, role_id: str) -> None:
         """Назначить роль группе."""
-        await self._database.execute(
+        self._database.execute(
             "INSERT INTO auth.group_roles (group_id, role_id) "
             "VALUES ($1, $2) ON CONFLICT DO NOTHING",
             group_id, role_id,
@@ -467,14 +467,14 @@ class AuthRepository:
 
     async def remove_role_from_group(self, group_id: str, role_id: str) -> None:
         """Убрать роль у группы."""
-        await self._database.execute(
+        self._database.execute(
             "DELETE FROM auth.group_roles WHERE group_id = $1 AND role_id = $2",
             group_id, role_id,
         )
 
     async def get_group_roles(self, group_id: str) -> list[dict[str, Any]]:
         """Получить роли группы."""
-        rows = await self._database.fetch(
+        rows = self._database.fetch(
             "SELECT r.id, r.name, r.description, r.is_builtin "
             "FROM auth.group_roles gr "
             "JOIN auth.roles r ON r.id = gr.role_id "
@@ -491,7 +491,7 @@ class AuthRepository:
         self, user_id: str, role_id: str, granted_by: str | None = None,
     ) -> None:
         """Назначить роль пользователю."""
-        await self._database.execute(
+        self._database.execute(
             "INSERT INTO auth.user_roles (user_id, role_id, granted_by) "
             "VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
             user_id, role_id, granted_by,
@@ -499,14 +499,14 @@ class AuthRepository:
 
     async def remove_role_from_user(self, user_id: str, role_id: str) -> None:
         """Убрать роль у пользователя."""
-        await self._database.execute(
+        self._database.execute(
             "DELETE FROM auth.user_roles WHERE user_id = $1 AND role_id = $2",
             user_id, role_id,
         )
 
     async def get_user_roles(self, user_id: str) -> list[dict[str, Any]]:
         """Получить прямые роли пользователя."""
-        rows = await self._database.fetch(
+        rows = self._database.fetch(
             "SELECT r.id, r.name, r.description, r.is_builtin "
             "FROM auth.user_roles ur "
             "JOIN auth.roles r ON r.id = ur.role_id "
@@ -524,7 +524,7 @@ class AuthRepository:
 
         Рекурсивный CTE с глубиной ≤ 10.
         """
-        rows = await self._database.fetch(
+        rows = self._database.fetch(
             "WITH RECURSIVE group_hierarchy AS ("
             "  -- Начинаем с прямых групп пользователя"
             "  SELECT ugm.group_id, 0 AS depth "
@@ -562,7 +562,7 @@ class AuthRepository:
         2. Ролей групп (включая иерархию)
         3. Ролей родительских групп
         """
-        rows = await self._database.fetch(
+        rows = self._database.fetch(
             "WITH RECURSIVE group_hierarchy AS ("
             "  SELECT ugm.group_id "
             "  FROM auth.user_group_membership ugm "
@@ -675,7 +675,7 @@ class AuthRepository:
     async def revoke_session(self, session_id: str) -> None:
         """Отозвать сессию."""
         from datetime import datetime, timezone
-        await self._database.execute(
+        self._database.execute(
             "UPDATE auth.auth_sessions SET is_revoked = TRUE, revoked_at = $1 "
             "WHERE id = $2",
             datetime.now(timezone.utc), session_id,
@@ -684,7 +684,7 @@ class AuthRepository:
     async def revoke_all_user_sessions(self, user_id: str) -> None:
         """Отозвать все сессии пользователя."""
         from datetime import datetime, timezone
-        await self._database.execute(
+        self._database.execute(
             "UPDATE auth.auth_sessions SET is_revoked = TRUE, revoked_at = $1 "
             "WHERE user_id = $2 AND is_revoked = FALSE",
             datetime.now(timezone.utc), user_id,
@@ -693,7 +693,7 @@ class AuthRepository:
     async def revoke_family(self, family_id: str) -> None:
         """Отозвать всю семью токенов (для обнаружения reuse)."""
         from datetime import datetime, timezone
-        await self._database.execute(
+        self._database.execute(
             "UPDATE auth.auth_sessions SET is_revoked = TRUE, revoked_at = $1 "
             "WHERE family_id = $2 AND is_revoked = FALSE",
             datetime.now(timezone.utc), family_id,
@@ -702,7 +702,7 @@ class AuthRepository:
     async def update_session_last_used(self, session_id: str) -> None:
         """Обновить время последнего использования."""
         from datetime import datetime, timezone
-        await self._database.execute(
+        self._database.execute(
             "UPDATE auth.auth_sessions SET last_used_at = $1 WHERE id = $2",
             datetime.now(timezone.utc), session_id,
         )
@@ -730,31 +730,31 @@ class AuthRepository:
 
     async def delete_user_roles(self, user_id: str) -> None:
         """Удалить все роли пользователя."""
-        await self._database.execute(
+        self._database.execute(
             "DELETE FROM auth.user_roles WHERE user_id = $1", user_id,
         )
 
     async def delete_user_group_memberships(self, user_id: str) -> None:
         """Удалить все групповые связи пользователя."""
-        await self._database.execute(
+        self._database.execute(
             "DELETE FROM auth.user_group_membership WHERE user_id = $1", user_id,
         )
 
     async def delete_user_password_history(self, user_id: str) -> None:
         """Удалить историю паролей пользователя."""
-        await self._database.execute(
+        self._database.execute(
             "DELETE FROM auth.password_history WHERE user_id = $1", user_id,
         )
 
     async def delete_group_memberships(self, group_id: str) -> None:
         """Удалить все связи участников группы."""
-        await self._database.execute(
+        self._database.execute(
             "DELETE FROM auth.user_group_membership WHERE group_id = $1", group_id,
         )
 
     async def delete_group_hierarchy(self, group_id: str) -> None:
         """Удалить все иерархические связи группы."""
-        await self._database.execute(
+        self._database.execute(
             "DELETE FROM auth.group_group_membership "
             "WHERE parent_group_id = $1 OR child_group_id = $1",
             group_id,
@@ -762,31 +762,31 @@ class AuthRepository:
 
     async def delete_group_role_assignments(self, group_id: str) -> None:
         """Удалить все назначения ролей группы."""
-        await self._database.execute(
+        self._database.execute(
             "DELETE FROM auth.group_roles WHERE group_id = $1", group_id,
         )
 
     async def delete_role_user_assignments(self, role_id: str) -> None:
         """Удалить все пользовательские назначения роли."""
-        await self._database.execute(
+        self._database.execute(
             "DELETE FROM auth.user_roles WHERE role_id = $1", role_id,
         )
 
     async def delete_role_group_assignments(self, role_id: str) -> None:
         """Удалить все групповые назначения роли."""
-        await self._database.execute(
+        self._database.execute(
             "DELETE FROM auth.group_roles WHERE role_id = $1", role_id,
         )
 
     async def delete_role_permissions(self, role_id: str) -> None:
         """Удалить все permissions роли."""
-        await self._database.execute(
+        self._database.execute(
             "DELETE FROM auth.role_permissions WHERE role_id = $1", role_id,
         )
 
     async def get_role_permissions(self, role_id: str) -> list[dict[str, Any]]:
         """Получить permissions роли."""
-        rows = await self._database.fetch(
+        rows = self._database.fetch(
             "SELECT p.name, p.description FROM auth.role_permissions rp "
             "JOIN auth.permissions p ON p.id = rp.permission_id "
             "WHERE rp.role_id = $1",
