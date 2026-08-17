@@ -16,10 +16,9 @@
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
 from typing import Any
 
-from modules_system.module_base import ModuleBase
+from modules_system.module_base import ModuleBase, ModuleMeta
 from .provider import AuthProvider
 from .config import AuthConfig
 
@@ -40,6 +39,7 @@ class AuthModule(ModuleBase):
     """Auth-модуль для Mia Framework.
 
     Phase 1: PostgreSQL + argon2id + JWT HS256 + permissions cache.
+    Метаданные модуля (permissions, cache, lock, timeout) описаны декларативно.
     """
 
     @property
@@ -49,6 +49,27 @@ class AuthModule(ModuleBase):
     @property
     def version(self) -> str:
         return MODULE_VERSION
+
+    @property
+    def meta(self) -> ModuleMeta:
+        return ModuleMeta(
+            permissions={
+                "login": "auth.login",
+                "create_user": "auth.create_user",
+                "check_permission": "auth.check",
+            },
+            cache_rules={
+                "get_user": 300,
+                "check_permission": 60,
+            },
+            lock_rules={
+                "login": "user:{username}",
+            },
+            timeout_defaults={
+                "login": 10.0,
+                "create_user": 5.0,
+            },
+        )
 
     def __init__(self, config: AuthConfig | None = None) -> None:
         self._config = config or AuthConfig.from_env()
