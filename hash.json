@@ -4,7 +4,7 @@
     "__init__.py": "4860e39698016e5d45f236cfda33daeabb52892644d8fdc06ad498cbd3f8ea3b",
     "bootstrap.py": "b7b9a9899e7ecefcb11ea3e451dcaa79cf101bce7cb80b9e400a0d9eacb2196a",
     "config.py": "47ca9fa66296db8392e90f70fd67dc580597c807795acbdfe1598d8eda54514d",
-    "decorators.py": "d32360a4913a978e4561fa0370f68ec86f39ec0b78ce402945519a977ff3039c",
+    "decorators.py": "bbde6ff23093d7936fc80af120ec36d59abc5c05bd1db85ba1b2c7fc3620ac6f",
     "jwt.py": "4fc5366417393a91d41847cb543f18a6dcc5a99a1701f87315f32232130270cd",
     "password.py": "86c65577ed3f8196ce4bfb281fc6d5988c347529e9fd73eb6180c1d75ba4f5b6",
     "permissions_cache.py": "5218ae809e02e17bf176f685fd12919223b28e10d2fa74e7191b45ef1bd3a87f",
@@ -26,5 +26,5 @@
     "tests/test_schema_registry.py": "707529deb4b43e14efc1f3e177515cb379185dbe06f58f5416f619877140322c",
     "validators.py": "636ce38a95674eec70cf6bfe30a93824faee6e7b9e44fab76b65bc1cd7b7f508"
   },
-  "manifest_hash": "27ee4b7230926797ffb6aff81cae6d8999de7c840ca8f03de937d13ab508dab1"
+  "manifest_hash": "17529b762fec75ee186a766f537bf697209fb196fe005e2f4b821bcb66c3cf06"
 }

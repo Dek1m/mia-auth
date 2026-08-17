@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import functools
 from typing import Any, Callable
 
@@ -47,12 +48,18 @@ def auth_method(
         }
         func._auth_method_meta = meta  # type: ignore[attr-defined]
 
-        @functools.wraps(func)
-        def wrapper(*args: Any, **kwargs: Any) -> Any:
-            return func(*args, **kwargs)
+        if asyncio.iscoroutinefunction(func):
+            @functools.wraps(func)
+            async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
+                return await func(*args, **kwargs)
+            async_wrapper._auth_method_meta = meta  # type: ignore[attr-defined]
+            return async_wrapper
 
-        wrapper._auth_method_meta = meta  # type: ignore[attr-defined]
-        return wrapper
+        @functools.wraps(func)
+        def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
+            return func(*args, **kwargs)
+        sync_wrapper._auth_method_meta = meta  # type: ignore[attr-defined]
+        return sync_wrapper
 
     if fn is not None:
         return decorator(fn)
