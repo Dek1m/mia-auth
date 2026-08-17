@@ -31,7 +31,7 @@ class AuthSchemaRegistry:
 
     async def _fetchrow(self, query: str, *params: Any) -> dict[str, Any] | None:
         """Получить одну строку или None."""
-        rows = self._database.fetch(query, *params)
+        rows = await self._database.fetch(query, *params)
         return dict(rows[0]) if rows else None
 
     async def register(
@@ -87,7 +87,7 @@ class AuthSchemaRegistry:
                         f"Module '{module_name}' cannot overwrite it."
                     )
 
-            self._database.execute(
+            await self._database.execute(
                 "INSERT INTO auth.permissions (name, description, is_builtin, source_module, updated_at) "
                 "VALUES ($1, $2, $3, $4, NOW()) "
                 "ON CONFLICT (name) DO UPDATE SET "
@@ -126,7 +126,7 @@ class AuthSchemaRegistry:
                         f"Module '{module_name}' cannot overwrite it."
                     )
 
-            self._database.execute(
+            await self._database.execute(
                 "INSERT INTO auth.roles (name, description, is_builtin, source_module, updated_at) "
                 "VALUES ($1, $2, $3, $4, NOW()) "
                 "ON CONFLICT (name) DO UPDATE SET "
@@ -147,7 +147,7 @@ class AuthSchemaRegistry:
             )
             if role_row is not None:
                 role_id = role_row["id"]
-                self._database.execute(
+                await self._database.execute(
                     "DELETE FROM auth.role_permissions WHERE role_id = $1",
                     role_id,
                 )
@@ -157,7 +157,7 @@ class AuthSchemaRegistry:
                         perm_name,
                     )
                     if perm_row is not None:
-                        self._database.execute(
+                        await self._database.execute(
                             "INSERT INTO auth.role_permissions (role_id, permission_id) "
                             "VALUES ($1, $2) ON CONFLICT DO NOTHING",
                             role_id,
