@@ -27,25 +27,25 @@ class RegistryMockPool:
         self._seq = 0
 
     async def fetchrow(self, query: str, *args):
-        if "SELECT source_module FROM permissions" in query:
+        if "SELECT source_module FROM auth.permissions" in query:
             name = args[0]
             p = self._permissions.get(name)
             if p:
                 return {"source_module": p["source_module"]}
             return None
-        if "SELECT source_module FROM roles" in query:
+        if "SELECT source_module FROM auth.roles" in query:
             name = args[0]
             r = self._roles.get(name)
             if r:
                 return {"source_module": r["source_module"]}
             return None
-        if "SELECT id FROM roles" in query:
+        if "SELECT id FROM auth.roles" in query:
             name = args[0]
             r = self._roles.get(name)
             if r:
                 return {"id": r["id"]}
             return None
-        if "SELECT id FROM permissions" in query:
+        if "SELECT id FROM auth.permissions" in query:
             name = args[0]
             p = self._permissions.get(name)
             if p:
@@ -54,7 +54,7 @@ class RegistryMockPool:
         return None
 
     async def execute(self, query: str, *args) -> str:
-        if "INSERT INTO permissions" in query and "ON CONFLICT" in query:
+        if "INSERT INTO auth.permissions" in query and "ON CONFLICT" in query:
             name = args[0]
             description = args[1]
             is_builtin = args[2]
@@ -73,7 +73,7 @@ class RegistryMockPool:
                     "is_builtin": is_builtin,
                     "source_module": source_module,
                 }
-        elif "INSERT INTO roles" in query and "ON CONFLICT" in query:
+        elif "INSERT INTO auth.roles" in query and "ON CONFLICT" in query:
             name = args[0]
             description = args[1]
             is_builtin = args[2]
@@ -90,14 +90,14 @@ class RegistryMockPool:
                     "is_builtin": is_builtin,
                     "source_module": source_module,
                 }
-        elif "DELETE FROM role_permissions" in query:
+        elif "DELETE FROM auth.role_permissions" in query:
             role_id = args[0]
             # Находим role_name по id
             for rn, rv in self._roles.items():
                 if rv["id"] == role_id:
                     self._role_permissions[rn] = []
                     break
-        elif "INSERT INTO role_permissions" in query and "ON CONFLICT" in query:
+        elif "INSERT INTO auth.role_permissions" in query and "ON CONFLICT" in query:
             role_id = args[0]
             perm_id = args[1]
             # Находим role_name и perm_name
@@ -111,6 +111,23 @@ class RegistryMockPool:
         return "OK"
 
     async def fetch(self, query: str, *args) -> list[dict]:
+        """Аналог DatabaseProvider.fetch — возвращает список строк."""
+        if "SELECT source_module FROM auth.permissions" in query:
+            name = args[0]
+            p = self._permissions.get(name)
+            return [{"source_module": p["source_module"]}] if p else []
+        if "SELECT source_module FROM auth.roles" in query:
+            name = args[0]
+            r = self._roles.get(name)
+            return [{"source_module": r["source_module"]}] if r else []
+        if "SELECT id FROM auth.roles" in query:
+            name = args[0]
+            r = self._roles.get(name)
+            return [{"id": r["id"]}] if r else []
+        if "SELECT id FROM auth.permissions" in query:
+            name = args[0]
+            p = self._permissions.get(name)
+            return [{"id": p["id"]}] if p else []
         return []
 
 

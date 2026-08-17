@@ -43,7 +43,7 @@ from modules.auth.decorators import auth_method
 
 @pytest.fixture
 def provider(mock_pool, auth_config) -> AuthProvider:
-    return AuthProvider(config=auth_config, pool=mock_pool)
+    return AuthProvider(config=auth_config, database=mock_pool)
 
 
 # ═══════════════════════════════════════════════════════════
@@ -114,7 +114,7 @@ class TestLoginLockout:
             login_attempts_limit=3,
             login_block_minutes=30,
         )
-        provider = AuthProvider(config=config, pool=mock_pool)
+        provider = AuthProvider(config=config, database=mock_pool)
         user = await provider.create_user("admin", "SecurePass123")
 
         for _ in range(3):
@@ -518,11 +518,11 @@ class TestDeleteUser:
             "user_id": user["id"], "role_id": "role-admin",
         })
 
-        # get_active_admin_count использует JOIN, mock не поддерживает
-        # Прямая проверка через патч
-        with patch.object(provider._repo, "get_active_admin_count", return_value=1):
-            with pytest.raises(ForbiddenError, match="last system_admin"):
-                await provider.delete_user(user["id"])
+        # get_active_admin_count и is_user_admin используют JOIN → мокаем через patch
+        with patch.object(provider._repo, "is_user_admin", return_value=True):
+            with patch.object(provider._repo, "get_active_admin_count", return_value=1):
+                with pytest.raises(ForbiddenError, match="last system_admin"):
+                    await provider.delete_user(user["id"])
 
     async def test_delete_force_skips_admin_check(self, provider: AuthProvider, mock_pool):
         """force=True пропускает проверку последнего admin."""
@@ -609,7 +609,7 @@ class TestBootstrap:
 
     async def test_bootstrap_without_pool_raises(self, auth_config):
         """Bootstrap без pool → AuthError."""
-        provider = AuthProvider(config=auth_config, pool=None)
+        provider = AuthProvider(config=auth_config, database=None)
         with pytest.raises(AuthError, match="not initialized"):
             await provider.bootstrap("admin", "SecurePass123")
 
@@ -878,7 +878,7 @@ class TestAuthDecorator:
 
 @pytest.mark.asyncio
 class TestListGroupsBug:
-    """BUG: list_groups вызывает list_users вместо list_groups."""
+    """BUG FIX: list_groups теперь вызывает list_groups, а не list_users."""
 
     async def test_list_groups_returns_groups_not_users(self, provider: AuthProvider, mock_pool):
         """list_groups должен возвращать группы, а не пользователей."""
@@ -886,14 +886,10 @@ class TestListGroupsBug:
         await provider.create_group("Editors")
         await provider.create_user("admin", "SecurePass123")
 
-        # list_groups ДОЛЖЕН вернуть 2 группы
-        # Но目前 list_groups вызывает self._repo.list_users(offset, limit)
-        # Это БАГ — проверяем что он есть
+        # list_groups ДОЛЖЕН вернуть 2 группы (исправленный баг)
         items, total = await provider.list_groups()
-        # В текущей реализации вернётся список пользователей (1), а не групп (2)
-        # Это подтверждает баг
-        assert total != 2 or len(items) != 2, \
-            "list_groups should return groups, not users — BUG in provider.py:765"
+        assert total == 2 and len(items) == 2, \
+            "list_groups should return groups, not users"
 
 
 # ═══════════════════════════════════════════════════════════

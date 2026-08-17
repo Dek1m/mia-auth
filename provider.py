@@ -117,22 +117,21 @@ class AuthProvider:
     def __init__(
         self,
         config: AuthConfig | None = None,
-        pool: Any | None = None,
+        database: Any | None = None,
     ) -> None:
         """Args:
             config: Конфигурация auth-модуля.
-            pool: asyncpg pool (если None — не используется).
+            database: Database Provider (если None — не используется).
         """
         self._config = config or AuthConfig()
-        self._pool = pool
         self._repo: AuthRepository | None = None
         self._registry: AuthSchemaRegistry | None = None
         self._cache: PermissionsCache | None = None
         self._bootstrap: AuthBootstrap | None = None
 
-        if pool is not None:
-            self._repo = AuthRepository(pool)
-            self._registry = AuthSchemaRegistry(pool)
+        if database is not None:
+            self._repo = AuthRepository(database)
+            self._registry = AuthSchemaRegistry(database)
             self._cache = PermissionsCache(ttl=self._config.perms_cache_ttl)
             self._bootstrap = AuthBootstrap(self._repo, self._registry)
 
@@ -167,14 +166,14 @@ class AuthProvider:
     async def get_user(self, user_id: str) -> dict[str, Any] | None:
         """Получить пользователя по ID."""
         if self._repo is None:
-            raise AuthError("Auth not initialized (no DB pool)")
+            raise AuthError("Auth not initialized (no Database Provider)")
         return await self._repo.get_user(user_id)
 
     @task(type="database", timeout=5.0)
     async def get_user_by_username(self, username: str) -> dict[str, Any] | None:
         """Получить пользователя по username."""
         if self._repo is None:
-            raise AuthError("Auth not initialized (no DB pool)")
+            raise AuthError("Auth not initialized (no Database Provider)")
         return await self._repo.get_user_by_username(username)
 
     @task(type="database", timeout=5.0)
@@ -188,7 +187,7 @@ class AuthProvider:
     ) -> dict[str, Any]:
         """Создать пользователя."""
         if self._repo is None:
-            raise AuthError("Auth not initialized (no DB pool)")
+            raise AuthError("Auth not initialized (no Database Provider)")
 
         # Проверка уникальности username
         existing = await self._repo.get_user_by_username(username)
@@ -216,7 +215,7 @@ class AuthProvider:
     async def update_user(self, user_id: str, data: dict[str, Any]) -> dict[str, Any] | None:
         """Обновить пользователя."""
         if self._repo is None:
-            raise AuthError("Auth not initialized (no DB pool)")
+            raise AuthError("Auth not initialized (no Database Provider)")
         result = await self._repo.update_user(user_id, data)
         if result and self._cache:
             self._cache.invalidate(user_id)
@@ -232,7 +231,7 @@ class AuthProvider:
         С force: каскадное удаление.
         """
         if self._repo is None:
-            raise AuthError("Auth not initialized (no DB pool)")
+            raise AuthError("Auth not initialized (no Database Provider)")
 
         # Проверка: последний system_admin
         user = await self._repo.get_user(user_id)
@@ -240,12 +239,7 @@ class AuthProvider:
             raise NotFoundError("User")
 
         # Проверяем, является ли пользователь system_admin
-        is_admin = await self._repo._pool.fetchval(
-            "SELECT EXISTS(SELECT 1 FROM auth.user_roles ur "
-            "JOIN auth.roles r ON r.id = ur.role_id "
-            "WHERE ur.user_id = $1 AND r.name = 'system_admin')",
-            user_id,
-        )
+        is_admin = await self._repo.is_user_admin(user_id)
         if is_admin:
             admin_count = await self._repo.get_active_admin_count()
             if admin_count <= 1 and not force:
@@ -254,27 +248,17 @@ class AuthProvider:
         # Проверка зависимостей (без force)
         if not force:
             groups = await self._repo.get_user_groups(user_id)
-            sessions_check = await self._repo._pool.fetchval(
-                "SELECT COUNT(*) FROM auth.auth_sessions WHERE user_id = $1",
-                user_id,
-            )
-            if groups or (sessions_check and sessions_check > 0):
+            sessions_count = await self._repo.count_user_sessions(user_id)
+            if groups or sessions_count > 0:
                 raise ForbiddenError(
                     "User has dependencies (groups, sessions). Use force=True to cascade."
                 )
 
         # Каскадное удаление
         await self._repo.revoke_all_user_sessions(user_id)
-        # Удаляем связи
-        await self._repo._pool.execute(
-            "DELETE FROM auth.user_roles WHERE user_id = $1", user_id,
-        )
-        await self._repo._pool.execute(
-            "DELETE FROM auth.user_group_membership WHERE user_id = $1", user_id,
-        )
-        await self._repo._pool.execute(
-            "DELETE FROM auth.password_history WHERE user_id = $1", user_id,
-        )
+        await self._repo.delete_user_roles(user_id)
+        await self._repo.delete_user_group_memberships(user_id)
+        await self._repo.delete_user_password_history(user_id)
         result = await self._repo.delete_user(user_id)
 
         if self._cache:
@@ -289,7 +273,7 @@ class AuthProvider:
     ) -> tuple[list[dict[str, Any]], int]:
         """Список пользователей с пагинацией."""
         if self._repo is None:
-            raise AuthError("Auth not initialized (no DB pool)")
+            raise AuthError("Auth not initialized (no Database Provider)")
         return await self._repo.list_users(offset, limit, search)
 
     # ─────────────────────────────────────────────
@@ -300,7 +284,7 @@ class AuthProvider:
     async def block_user(self, user_id: str, minutes: int | None = None) -> None:
         """Заблокировать пользователя."""
         if self._repo is None:
-            raise AuthError("Auth not initialized (no DB pool)")
+            raise AuthError("Auth not initialized (no Database Provider)")
         mins = minutes or self._config.login_block_minutes
         until = datetime.now(timezone.utc) + timedelta(minutes=mins)
         await self._repo.block_user(user_id, until)
@@ -313,7 +297,7 @@ class AuthProvider:
     async def unblock_user(self, user_id: str) -> None:
         """Разблокировать пользователя."""
         if self._repo is None:
-            raise AuthError("Auth not initialized (no DB pool)")
+            raise AuthError("Auth not initialized (no Database Provider)")
         await self._repo.unblock_user(user_id)
         if self._cache:
             self._cache.invalidate(user_id)
@@ -323,7 +307,7 @@ class AuthProvider:
     async def disable_user(self, user_id: str) -> None:
         """Деактивировать пользователя."""
         if self._repo is None:
-            raise AuthError("Auth not initialized (no DB pool)")
+            raise AuthError("Auth not initialized (no Database Provider)")
         await self._repo.disable_user(user_id)
         await self._repo.revoke_all_user_sessions(user_id)
         if self._cache:
@@ -334,7 +318,7 @@ class AuthProvider:
     async def enable_user(self, user_id: str) -> None:
         """Активировать пользователя."""
         if self._repo is None:
-            raise AuthError("Auth not initialized (no DB pool)")
+            raise AuthError("Auth not initialized (no Database Provider)")
         await self._repo.enable_user(user_id)
         if self._cache:
             self._cache.invalidate(user_id)
@@ -351,7 +335,7 @@ class AuthProvider:
         Сохраняет в историю паролей и проверяет на дубликат.
         """
         if self._repo is None:
-            raise AuthError("Auth not initialized (no DB pool)")
+            raise AuthError("Auth not initialized (no Database Provider)")
 
         self._validate_password(password)
         new_hash = hash_password(password)
@@ -392,7 +376,7 @@ class AuthProvider:
             AccountDisabledError: Аккаунт деактивирован.
         """
         if self._repo is None:
-            raise AuthError("Auth not initialized (no DB pool)")
+            raise AuthError("Auth not initialized (no Database Provider)")
 
         user = await self._repo.get_user_by_username(username)
         if not user:
@@ -507,7 +491,7 @@ class AuthProvider:
             AuthError: Сессия не найдена или истекла.
         """
         if self._repo is None:
-            raise AuthError("Auth not initialized (no DB pool)")
+            raise AuthError("Auth not initialized (no Database Provider)")
 
         refresh_hash_val = hash_token(refresh_token)
         session = await self._repo.get_session_by_refresh(refresh_hash_val)
@@ -592,7 +576,7 @@ class AuthProvider:
     async def logout(self, refresh_token: str) -> bool:
         """Выход пользователя — отзыв сессии по refresh token."""
         if self._repo is None:
-            raise AuthError("Auth not initialized (no DB pool)")
+            raise AuthError("Auth not initialized (no Database Provider)")
 
         refresh_hash_val = hash_token(refresh_token)
         session = await self._repo.get_session_by_refresh(refresh_hash_val)
@@ -714,14 +698,14 @@ class AuthProvider:
     ) -> dict[str, Any]:
         """Создать группу."""
         if self._repo is None:
-            raise AuthError("Auth not initialized (no DB pool)")
+            raise AuthError("Auth not initialized (no Database Provider)")
         return await self._repo.create_group(name, description)
 
     @task(type="database", timeout=5.0)
     async def update_group(self, group_id: str, data: dict[str, Any]) -> dict[str, Any] | None:
         """Обновить группу."""
         if self._repo is None:
-            raise AuthError("Auth not initialized (no DB pool)")
+            raise AuthError("Auth not initialized (no Database Provider)")
         return await self._repo.update_group(group_id, data)
 
     @task(type="database", timeout=5.0)
@@ -732,7 +716,7 @@ class AuthProvider:
         С force: каскадное удаление.
         """
         if self._repo is None:
-            raise AuthError("Auth not initialized (no DB pool)")
+            raise AuthError("Auth not initialized (no Database Provider)")
 
         if not force:
             deps = await self._repo.count_group_dependencies(group_id)
@@ -743,17 +727,9 @@ class AuthProvider:
                 )
 
         # Каскадное удаление
-        await self._repo._pool.execute(
-            "DELETE FROM auth.user_group_membership WHERE group_id = $1", group_id,
-        )
-        await self._repo._pool.execute(
-            "DELETE FROM auth.group_group_membership "
-            "WHERE parent_group_id = $1 OR child_group_id = $1",
-            group_id,
-        )
-        await self._repo._pool.execute(
-            "DELETE FROM auth.group_roles WHERE group_id = $1", group_id,
-        )
+        await self._repo.delete_group_memberships(group_id)
+        await self._repo.delete_group_hierarchy(group_id)
+        await self._repo.delete_group_role_assignments(group_id)
         return await self._repo.delete_group(group_id)
 
     @task(type="database", timeout=5.0)
@@ -762,42 +738,42 @@ class AuthProvider:
     ) -> tuple[list[dict[str, Any]], int]:
         """Список групп с пагинацией."""
         if self._repo is None:
-            raise AuthError("Auth not initialized (no DB pool)")
-        return await self._repo.list_users(offset, limit)
+            raise AuthError("Auth not initialized (no Database Provider)")
+        return await self._repo.list_groups(offset, limit)
 
     @task(type="database", timeout=5.0)
     async def add_user_to_group(self, user_id: str, group_id: str, added_by: str | None = None) -> None:
         """Добавить пользователя в группу."""
         if self._repo is None:
-            raise AuthError("Auth not initialized (no DB pool)")
+            raise AuthError("Auth not initialized (no Database Provider)")
         await self._repo.add_user_to_group(user_id, group_id, added_by)
 
     @task(type="database", timeout=5.0)
     async def remove_user_from_group(self, user_id: str, group_id: str) -> None:
         """Удалить пользователя из группы."""
         if self._repo is None:
-            raise AuthError("Auth not initialized (no DB pool)")
+            raise AuthError("Auth not initialized (no Database Provider)")
         await self._repo.remove_user_from_group(user_id, group_id)
 
     @task(type="database", timeout=5.0)
     async def get_user_groups(self, user_id: str) -> list[dict[str, Any]]:
         """Получить группы пользователя."""
         if self._repo is None:
-            raise AuthError("Auth not initialized (no DB pool)")
+            raise AuthError("Auth not initialized (no Database Provider)")
         return await self._repo.get_user_groups(user_id)
 
     @task(type="database", timeout=5.0)
     async def add_group_to_group(self, parent_id: str, child_id: str) -> None:
         """Добавить дочернюю группу к родительской."""
         if self._repo is None:
-            raise AuthError("Auth not initialized (no DB pool)")
+            raise AuthError("Auth not initialized (no Database Provider)")
         await self._repo.add_group_to_group(parent_id, child_id)
 
     @task(type="database", timeout=5.0)
     async def remove_group_from_group(self, parent_id: str, child_id: str) -> None:
         """Удалить дочернюю группу."""
         if self._repo is None:
-            raise AuthError("Auth not initialized (no DB pool)")
+            raise AuthError("Auth not initialized (no Database Provider)")
         await self._repo.remove_group_from_group(parent_id, child_id)
 
     # ─────────────────────────────────────────────
@@ -810,14 +786,14 @@ class AuthProvider:
     ) -> dict[str, Any]:
         """Создать роль."""
         if self._repo is None:
-            raise AuthError("Auth not initialized (no DB pool)")
+            raise AuthError("Auth not initialized (no Database Provider)")
         return await self._repo.create_role(name, description, is_builtin)
 
     @task(type="database", timeout=5.0)
     async def update_role(self, role_id: str, data: dict[str, Any]) -> dict[str, Any] | None:
         """Обновить роль."""
         if self._repo is None:
-            raise AuthError("Auth not initialized (no DB pool)")
+            raise AuthError("Auth not initialized (no Database Provider)")
         return await self._repo.update_role(role_id, data)
 
     @task(type="database", timeout=5.0)
@@ -828,7 +804,7 @@ class AuthProvider:
         С force: каскадное удаление.
         """
         if self._repo is None:
-            raise AuthError("Auth not initialized (no DB pool)")
+            raise AuthError("Auth not initialized (no Database Provider)")
 
         if not force:
             deps = await self._repo.count_role_assignments(role_id)
@@ -839,15 +815,9 @@ class AuthProvider:
                 )
 
         # Каскадное удаление
-        await self._repo._pool.execute(
-            "DELETE FROM auth.user_roles WHERE role_id = $1", role_id,
-        )
-        await self._repo._pool.execute(
-            "DELETE FROM auth.group_roles WHERE role_id = $1", role_id,
-        )
-        await self._repo._pool.execute(
-            "DELETE FROM auth.role_permissions WHERE role_id = $1", role_id,
-        )
+        await self._repo.delete_role_user_assignments(role_id)
+        await self._repo.delete_role_group_assignments(role_id)
+        await self._repo.delete_role_permissions(role_id)
         result = await self._repo.delete_role(role_id)
         if self._cache:
             self._cache.invalidate_all()
@@ -859,7 +829,7 @@ class AuthProvider:
     ) -> tuple[list[dict[str, Any]], int]:
         """Список ролей с пагинацией."""
         if self._repo is None:
-            raise AuthError("Auth not initialized (no DB pool)")
+            raise AuthError("Auth not initialized (no Database Provider)")
         return await self._repo.list_roles(offset, limit)
 
     @task(type="database", timeout=5.0)
@@ -868,7 +838,7 @@ class AuthProvider:
     ) -> None:
         """Назначить роль пользователю."""
         if self._repo is None:
-            raise AuthError("Auth not initialized (no DB pool)")
+            raise AuthError("Auth not initialized (no Database Provider)")
         await self._repo.assign_role_to_user(user_id, role_id, granted_by)
         if self._cache:
             self._cache.invalidate(user_id)
@@ -877,7 +847,7 @@ class AuthProvider:
     async def remove_role_from_user(self, user_id: str, role_id: str) -> None:
         """Убрать роль у пользователя."""
         if self._repo is None:
-            raise AuthError("Auth not initialized (no DB pool)")
+            raise AuthError("Auth not initialized (no Database Provider)")
         await self._repo.remove_role_from_user(user_id, role_id)
         if self._cache:
             self._cache.invalidate(user_id)
@@ -886,14 +856,14 @@ class AuthProvider:
     async def get_user_roles(self, user_id: str) -> list[dict[str, Any]]:
         """Получить прямые роли пользователя."""
         if self._repo is None:
-            raise AuthError("Auth not initialized (no DB pool)")
+            raise AuthError("Auth not initialized (no Database Provider)")
         return await self._repo.get_user_roles(user_id)
 
     @task(type="database", timeout=5.0)
     async def assign_role_to_group(self, group_id: str, role_id: str) -> None:
         """Назначить роль группе."""
         if self._repo is None:
-            raise AuthError("Auth not initialized (no DB pool)")
+            raise AuthError("Auth not initialized (no Database Provider)")
         await self._repo.assign_role_to_group(group_id, role_id)
         if self._cache:
             self._cache.invalidate_all()
@@ -902,7 +872,7 @@ class AuthProvider:
     async def remove_role_from_group(self, group_id: str, role_id: str) -> None:
         """Убрать роль у группы."""
         if self._repo is None:
-            raise AuthError("Auth not initialized (no DB pool)")
+            raise AuthError("Auth not initialized (no Database Provider)")
         await self._repo.remove_role_from_group(group_id, role_id)
         if self._cache:
             self._cache.invalidate_all()
@@ -911,24 +881,18 @@ class AuthProvider:
     async def get_group_roles(self, group_id: str) -> list[dict[str, Any]]:
         """Получить роли группы."""
         if self._repo is None:
-            raise AuthError("Auth not initialized (no DB pool)")
+            raise AuthError("Auth not initialized (no Database Provider)")
         return await self._repo.get_group_roles(group_id)
 
     @task(type="database", timeout=5.0)
     async def inspect_role(self, role_id: str) -> dict[str, Any] | None:
         """Получить роль с её permissions."""
         if self._repo is None:
-            raise AuthError("Auth not initialized (no DB pool)")
+            raise AuthError("Auth not initialized (no Database Provider)")
         role = await self._repo.get_role(role_id)
         if not role:
             return None
-        perms = await self._repo._pool.fetch(
-            "SELECT p.name, p.description FROM auth.role_permissions rp "
-            "JOIN auth.permissions p ON p.id = rp.permission_id "
-            "WHERE rp.role_id = $1",
-            role_id,
-        )
-        role["permissions"] = [dict(p) for p in perms]
+        role["permissions"] = await self._repo.get_role_permissions(role_id)
         return role
 
     # ─────────────────────────────────────────────
@@ -939,14 +903,14 @@ class AuthProvider:
     async def get_user_effective_roles(self, user_id: str) -> list[dict[str, Any]]:
         """Получить все эффективные роли (прямые + через группы)."""
         if self._repo is None:
-            raise AuthError("Auth not initialized (no DB pool)")
+            raise AuthError("Auth not initialized (no Database Provider)")
         return await self._repo.get_user_effective_roles(user_id)
 
     @task(type="database", timeout=5.0)
     async def get_user_effective_permissions(self, user_id: str) -> frozenset[str]:
         """Получить все эффективные permissions."""
         if self._repo is None:
-            raise AuthError("Auth not initialized (no DB pool)")
+            raise AuthError("Auth not initialized (no Database Provider)")
         return await self._repo.get_user_effective_permissions(user_id)
 
     # ─────────────────────────────────────────────
@@ -980,7 +944,7 @@ class AuthProvider:
     ) -> dict[str, Any]:
         """Создать первого системного администратора."""
         if self._bootstrap is None:
-            raise AuthError("Auth not initialized (no DB pool)")
+            raise AuthError("Auth not initialized (no Database Provider)")
         return await self._bootstrap.bootstrap(username, password, email)
 
     # ─────────────────────────────────────────────

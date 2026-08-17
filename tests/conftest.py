@@ -128,6 +128,25 @@ class MockPool:
     async def fetch(self, query: str, *params: Any) -> list[MockRow]:
         q = query.lower().strip()
 
+        # INSERT ... RETURNING — выполняем вставку и возвращаем строку
+        if "insert into" in q and "returning" in q:
+            table = self._find_table(query)
+            if not table:
+                return []
+            self._do_insert(query, params)
+            if table in self._data and self._data[table]:
+                last_id = list(self._data[table].keys())[-1]
+                return [MockRow(self._data[table][last_id])]
+            return []
+
+        # UPDATE ... RETURNING — выполняем обновление и возвращаем строки
+        if "update " in q and "returning" in q:
+            table = self._find_table(query)
+            if not table:
+                return []
+            updated_rows = self._do_update_returning(query, params)
+            return [MockRow(r) for r in updated_rows]
+
         # CTE (WITH RECURSIVE) — упрощённая поддержка
         if "with recursive" in q or "with " in q:
             return await self._handle_cte(query, params)

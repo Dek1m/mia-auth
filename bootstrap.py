@@ -81,16 +81,12 @@ class AuthBootstrap:
         user_id = user["id"]
 
         # Находим role_id для system_admin
-        role_row = await self._repo._pool.fetchrow(
-            "SELECT id FROM auth.roles WHERE name = 'system_admin'",
-        )
+        role_row = await self._repo.find_role_by_name("system_admin")
         if role_row:
             await self._repo.assign_role_to_user(user_id, role_row["id"])
 
         # Находим группу Administrators (если существует)
-        group_row = await self._repo._pool.fetchrow(
-            "SELECT id FROM auth.groups WHERE name = 'Administrators'",
-        )
+        group_row = await self._repo.find_group_by_name("Administrators")
         if group_row:
             await self._repo.add_user_to_group(user_id, group_row["id"])
 

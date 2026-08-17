@@ -15,6 +15,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any
 
@@ -55,14 +56,13 @@ class AuthModule(ModuleBase):
 
     def on_load(self, state: Any) -> None:
         """Инициализация модуля: создаёт провайдер и регистрирует в DI."""
-        # Получаем пул БД из DatabaseProvider
+        # Получаем Database Provider из State
         from modules.db.provider import DatabaseProvider
 
-        db_provider = state.services.resolve(DatabaseProvider)
-        pool = db_provider.pool
+        database = state.services.resolve(DatabaseProvider)
 
         # Создание провайдера и регистрация в DI
-        self._provider = AuthProvider(config=self._config, pool=pool)
+        self._provider = AuthProvider(config=self._config, database=database)
         state.services.register(AuthProvider, self._provider)
 
         # Регистрация AUTH_CORE_SCHEMA (идемпотентно)
@@ -84,7 +84,3 @@ class AuthModule(ModuleBase):
         if self._provider and self._provider.cache:
             self._provider.cache.invalidate_all()
         log.info("AuthModule unloaded")
-
-
-# Импорт asyncio нужен для on_load
-import asyncio  # noqa: E402

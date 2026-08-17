@@ -26,8 +26,13 @@ class AuthSchemaRegistry:
     Все операции идемпотентны.
     """
 
-    def __init__(self, pool: Any) -> None:
-        self._pool = pool
+    def __init__(self, database: Any) -> None:
+        self._database = database
+
+    async def _fetchrow(self, query: str, *params: Any) -> dict[str, Any] | None:
+        """Получить одну строку или None."""
+        rows = await self._database.fetch(query, *params)
+        return dict(rows[0]) if rows else None
 
     async def register(
         self,
@@ -68,8 +73,8 @@ class AuthSchemaRegistry:
             description = perm.get("description", "")
 
             # Проверяем существование для определения created/updated
-            existing = await self._pool.fetchrow(
-                "SELECT source_module FROM permissions WHERE name = $1",
+            existing = await self._fetchrow(
+                "SELECT source_module FROM auth.permissions WHERE name = $1",
                 name,
             )
 
@@ -82,8 +87,8 @@ class AuthSchemaRegistry:
                         f"Module '{module_name}' cannot overwrite it."
                     )
 
-            await self._pool.execute(
-                "INSERT INTO permissions (name, description, is_builtin, source_module, updated_at) "
+            await self._database.execute(
+                "INSERT INTO auth.permissions (name, description, is_builtin, source_module, updated_at) "
                 "VALUES ($1, $2, $3, $4, NOW()) "
                 "ON CONFLICT (name) DO UPDATE SET "
                 "description = EXCLUDED.description, "
@@ -107,8 +112,8 @@ class AuthSchemaRegistry:
             description = role.get("description", "")
             role_perms = role.get("permissions", [])
 
-            existing = await self._pool.fetchrow(
-                "SELECT source_module FROM roles WHERE name = $1",
+            existing = await self._fetchrow(
+                "SELECT source_module FROM auth.roles WHERE name = $1",
                 name,
             )
 
@@ -121,8 +126,8 @@ class AuthSchemaRegistry:
                         f"Module '{module_name}' cannot overwrite it."
                     )
 
-            await self._pool.execute(
-                "INSERT INTO roles (name, description, is_builtin, source_module, updated_at) "
+            await self._database.execute(
+                "INSERT INTO auth.roles (name, description, is_builtin, source_module, updated_at) "
                 "VALUES ($1, $2, $3, $4, NOW()) "
                 "ON CONFLICT (name) DO UPDATE SET "
                 "description = EXCLUDED.description, "
@@ -136,24 +141,24 @@ class AuthSchemaRegistry:
             )
 
             # Пересборка role_permissions: DELETE существующих + INSERT
-            role_row = await self._pool.fetchrow(
-                "SELECT id FROM roles WHERE name = $1",
+            role_row = await self._fetchrow(
+                "SELECT id FROM auth.roles WHERE name = $1",
                 name,
             )
             if role_row is not None:
                 role_id = role_row["id"]
-                await self._pool.execute(
-                    "DELETE FROM role_permissions WHERE role_id = $1",
+                await self._database.execute(
+                    "DELETE FROM auth.role_permissions WHERE role_id = $1",
                     role_id,
                 )
                 for perm_name in role_perms:
-                    perm_row = await self._pool.fetchrow(
-                        "SELECT id FROM permissions WHERE name = $1",
+                    perm_row = await self._fetchrow(
+                        "SELECT id FROM auth.permissions WHERE name = $1",
                         perm_name,
                     )
                     if perm_row is not None:
-                        await self._pool.execute(
-                            "INSERT INTO role_permissions (role_id, permission_id) "
+                        await self._database.execute(
+                            "INSERT INTO auth.role_permissions (role_id, permission_id) "
                             "VALUES ($1, $2) ON CONFLICT DO NOTHING",
                             role_id,
                             perm_row["id"],

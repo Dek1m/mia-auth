@@ -552,7 +552,7 @@ class TestRefreshTokenRotation:
             login_block_minutes=15,
             perms_cache_ttl=300,
         )
-        provider = AuthProvider(config=config, pool=pg_pool)
+        provider = AuthProvider(config=config, database=pg_pool)
 
         # Register schema for bootstrap
         from modules.auth.schema_registry import AuthSchemaRegistry
@@ -594,7 +594,7 @@ class TestRefreshTokenRotation:
             login_block_minutes=15,
             perms_cache_ttl=300,
         )
-        provider = AuthProvider(config=config, pool=pg_pool)
+        provider = AuthProvider(config=config, database=pg_pool)
 
         from modules.auth.schema_registry import AuthSchemaRegistry
         from modules.auth.schema import AUTH_CORE_SCHEMA

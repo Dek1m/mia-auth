@@ -28,7 +28,7 @@ from modules.auth.permissions_cache import PermissionsCache
 
 @pytest.fixture
 def provider(mock_pool, auth_config) -> AuthProvider:
-    return AuthProvider(config=auth_config, pool=mock_pool)
+    return AuthProvider(config=auth_config, database=mock_pool)
 
 
 @pytest.fixture
@@ -402,26 +402,11 @@ class TestDeleteUserLastAdmin:
             "user_id": "admin-1", "role_id": "role-admin",
         })
 
-        # MockPool не поддерживает JOIN → подменяем fetchval для
-        # двух запросов: is_admin (EXISTS+JOIN) и admin_count (COUNT+JOIN)
-        original_fetchval = mock_pool.fetchval
-
-        async def smart_fetchval(query, *params):
-            q = query.lower()
-            # get_active_admin_count: COUNT + JOIN + system_admin + is_active
-            if "count(*)" in q and "system_admin" in q and "is_active" in q:
-                return 1
-            # is_admin check: EXISTS + system_admin
-            if "exists(" in q and "system_admin" in q:
-                return True
-            return await original_fetchval(query, *params)
-
-        mock_pool.fetchval = smart_fetchval
-
-        with pytest.raises(ForbiddenError, match="last system_admin"):
-            await provider.delete_user("admin-1")
-
-        mock_pool.fetchval = original_fetchval
+        # is_user_admin использует JOIN → мокаем через patch
+        with patch.object(provider._repo, "is_user_admin", return_value=True):
+            with patch.object(provider._repo, "get_active_admin_count", return_value=1):
+                with pytest.raises(ForbiddenError, match="last system_admin"):
+                    await provider.delete_user("admin-1")
 
     async def test_delete_user_with_force_succeeds(
         self, provider: AuthProvider, mock_pool,
