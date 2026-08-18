@@ -8,10 +8,10 @@
     "jwt.py": "4fc5366417393a91d41847cb543f18a6dcc5a99a1701f87315f32232130270cd",
     "password.py": "86c65577ed3f8196ce4bfb281fc6d5988c347529e9fd73eb6180c1d75ba4f5b6",
     "permissions_cache.py": "5218ae809e02e17bf176f685fd12919223b28e10d2fa74e7191b45ef1bd3a87f",
-    "provider.py": "b4c5474712db58a32b36fc5dee0fc4d8c3a63f53d5a6bfd653b5f63691a27d04",
-    "repository.py": "8e219eccac01a9f4ab19dec588a2ffcd63835b7eee2ec58af5fef98051dc22d4",
+    "provider.py": "daf7e4765a72d0b860142ee89dd501ee1119bf3b9f08c289847b2036eb4f8646",
+    "repository.py": "dab299bc0d31aefaa82c2cfbcecb19747abb4a8dc4cde72d0470bfef96980a96",
     "schema.py": "07a3237b4e2f9de6ffc0c44edc1ba31dc6c975223e8736ea2b192d2ae8ee4f16",
-    "schema_registry.py": "c6c6de6e6f9f8c4de2f8b3b32e96d020ec3084c64b6e2e68f6bac0e304cc3aed",
+    "schema_registry.py": "a23ed70a8f59def781a3413327abc5195fec40a06a67651e906a78ff834cd758",
     "schemas.py": "2c2fba751e607adc9dddc575d4d2c00e082234e4c8af3f835483ecba1e123655",
     "tests/__init__.py": "70600204fcb77bbc85a50a0ed1116b1a62a1cc594562589fcbf86ccd3c90af5f",
     "tests/conftest.py": "f4d45935961af2d8869de9f3465dff7307b3251e059d4f4f3332537b9b6c229a",
@@ -26,5 +26,5 @@
     "tests/test_schema_registry.py": "72171ae5c7166cc28d65ed06ca354491dabd409644c261dbdad746cb789cbdf9",
     "validators.py": "636ce38a95674eec70cf6bfe30a93824faee6e7b9e44fab76b65bc1cd7b7f508"
   },
-  "manifest_hash": "dba21786a4f23b519e7a591daf228e8fe3663ec391c38bd523f8a641f65654bc"
+  "manifest_hash": "e80fda899f7c1c9664492417597d789d4cc50247561d48dbbbe708ca3025f748"
 }
