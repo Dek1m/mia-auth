@@ -535,8 +535,11 @@ class AuthProvider:
             if locked_until and locked_until > datetime.now(timezone.utc):
                 raise AccountLockedError(locked_until)
 
-        # Отзываем старую сессию
-        await self._repo.revoke_session(session["id"])
+        # Помечаем старую сессию как использованную (НЕ отзываем —
+        # иначе reuse detection не сработает: get_session_by_refresh
+        # фильтрует is_revoked=FALSE и не найдёт повторно использованный токен).
+        # Если токен будет использован повторно — last_used_at != None → reuse detected.
+        await self._repo.update_session_last_used(session["id"])
 
         # Создаём новую сессию с тем же family_id
         perms_version = await self._repo.get_permissions_version(user["id"])

@@ -340,12 +340,20 @@ class MockPool:
 
     def _apply_set(self, row: dict, set_part: str, params: tuple) -> None:
         """Применить SET операции к строке."""
-        # field = $N
+        # field = $N (numbered parameters, 1-indexed)
         for match in re.finditer(r'(\w+)\s*=\s*\$(\d+)', set_part):
             field = match.group(1)
             param_idx = int(match.group(2)) - 1
             if 0 <= param_idx < len(params):
                 row[field] = params[param_idx]
+
+        # field = %s (sequential parameters, consumed from params start)
+        percent_s_idx = 0
+        for match in re.finditer(r'(\w+)\s*=\s*%s', set_part):
+            field = match.group(1)
+            if percent_s_idx < len(params):
+                row[field] = params[percent_s_idx]
+                percent_s_idx += 1
 
         # field = field + $N (increment)
         for match in re.finditer(r'(\w+)\s*=\s*(\w+)\s*\+\s*(?:\$(\d+)|(\d+))', set_part):
@@ -420,9 +428,30 @@ class MockPool:
 # ── Фикстуры ────────────────────────────────────────────
 
 
+class MockLogger:
+    """Мок логера — ничего не делает, но не падает на вызовах."""
+
+    def info(self, *args: Any, **kwargs: Any) -> None:
+        pass
+
+    def warning(self, *args: Any, **kwargs: Any) -> None:
+        pass
+
+    def error(self, *args: Any, **kwargs: Any) -> None:
+        pass
+
+    def debug(self, *args: Any, **kwargs: Any) -> None:
+        pass
+
+
 @pytest.fixture
 def mock_pool() -> MockPool:
     return MockPool()
+
+
+@pytest.fixture
+def mock_logger() -> MockLogger:
+    return MockLogger()
 
 
 @pytest.fixture

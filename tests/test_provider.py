@@ -16,8 +16,8 @@ from modules.auth.password import hash_password
 
 
 @pytest.fixture
-def provider(mock_pool, auth_config) -> AuthProvider:
-    return AuthProvider(config=auth_config, database=mock_pool)
+def provider(mock_pool, auth_config, mock_logger) -> AuthProvider:
+    return AuthProvider(config=auth_config, database=mock_pool, log=mock_logger)
 
 
 @pytest.mark.asyncio
@@ -162,6 +162,22 @@ class TestProviderRefresh:
         })
         with pytest.raises(Exception):
             await provider.refresh_token("invalid-token")
+
+    async def test_refresh_reuse_revokes_family(self, provider: AuthProvider):
+        """Reuse old refresh token → revoke entire family (all tokens with family_id)."""
+        await provider.create_user("admin", "SecurePass123")
+        login_result = await provider.login("admin", "SecurePass123")
+
+        # First refresh — valid, creates new session in same family
+        refresh_result = await provider.refresh_token(login_result["refresh_token"])
+
+        # Reuse old token — should detect reuse and revoke family
+        with pytest.raises(ReuseDetectedError):
+            await provider.refresh_token(login_result["refresh_token"])
+
+        # New token from first refresh should also be revoked (family revoked)
+        with pytest.raises(Exception):
+            await provider.refresh_token(refresh_result["refresh_token"])
 
 
 @pytest.mark.asyncio
