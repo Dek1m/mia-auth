@@ -119,6 +119,7 @@ DB_SCHEMA: dict[str, dict[str, Any]] = {
         "columns": {
             "role_id": "UUID NOT NULL REFERENCES auth.roles(id) ON DELETE CASCADE",
             "permission_id": "UUID NOT NULL REFERENCES auth.permissions(id) ON DELETE CASCADE",
+            "updated_at": "TIMESTAMPTZ DEFAULT NOW()",
         },
     },
     # ── Сессии ────────────────────────────────────────────────
