@@ -254,8 +254,8 @@ class TestAuthSchemaRegistry:
         """Second registration should update, not duplicate."""
         
         schema = {
-            "permissions": [{"name": "test_idempotent:read", "description": "Read"}],
-            "roles": [{"name": "test_idempotent_role", "description": "Role", "permissions": ["test_idempotent:read"]}],
+            "permissions": [{"name": "test_module:read", "description": "Read"}],
+            "roles": [{"name": "test_module_role", "description": "Role", "permissions": ["test_module:read"]}],
         }
         result1 = await auth_provider.registry.register("test_module", schema, is_builtin=False)
         result2 = await auth_provider.registry.register("test_module", schema, is_builtin=False)
