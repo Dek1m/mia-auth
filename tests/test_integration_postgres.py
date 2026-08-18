@@ -215,7 +215,7 @@ class TestRegisterSchema:
 class TestUserCRUD:
     """User CRUD through AuthProvider with real PostgreSQL."""
 
-    def test_create_and_get_user(self, auth_provider):
+    async def test_create_and_get_user(self, auth_provider):
         """Create user and retrieve by ID."""
         
         user = await auth_provider.create_user("testuser", "SecurePass123")
@@ -225,14 +225,14 @@ class TestUserCRUD:
         assert fetched is not None
         assert fetched["username"] == "testuser"
 
-    def test_create_duplicate_user(self, auth_provider):
+    async def test_create_duplicate_user(self, auth_provider):
         """Duplicate username should raise ValueError."""
         
         await auth_provider.create_user("admin", "SecurePass123")
         with pytest.raises(ValueError, match="already exists"):
             await auth_provider.create_user("admin", "SecurePass123")
 
-    def test_login_and_logout(self, auth_provider):
+    async def test_login_and_logout(self, auth_provider):
         """Login returns tokens, logout revokes session."""
         
         await auth_provider.create_user("admin", "SecurePass123")
@@ -248,7 +248,7 @@ class TestUserCRUD:
 class TestRefreshTokenRotation:
     """Refresh token rotation through AuthProvider."""
 
-    def test_refresh_creates_new_tokens(self, auth_provider):
+    async def test_refresh_creates_new_tokens(self, auth_provider):
         """Refresh should create new access + refresh tokens."""
         
         await auth_provider.create_user("admin", "SecurePass123")
@@ -259,7 +259,7 @@ class TestRefreshTokenRotation:
         assert "refresh_token" in refresh_result
         assert refresh_result["refresh_token"] != login_result["refresh_token"]
 
-    def test_refresh_reuse_revokes_family(self, auth_provider):
+    async def test_refresh_reuse_revokes_family(self, auth_provider):
         """Reusing old refresh token should revoke entire family."""
         
         await auth_provider.create_user("admin", "SecurePass123")
@@ -281,7 +281,7 @@ class TestRefreshTokenRotation:
 class TestAuthSchemaRegistry:
     """AuthSchemaRegistry: permissions and roles registration."""
 
-    def test_register_permissions(self, auth_provider):
+    async def test_register_permissions(self, auth_provider):
         """Register permissions via AuthSchemaRegistry."""
         
         result = await auth_provider.registry.register(
@@ -296,11 +296,11 @@ class TestAuthSchemaRegistry:
                 ],
             },
             is_builtin=False,
-        ))
+        )
         assert len(result["created_permissions"]) == 2
         assert len(result["created_roles"]) == 1
 
-    def test_register_idempotent(self, auth_provider):
+    async def test_register_idempotent(self, auth_provider):
         """Second registration should update, not duplicate."""
         
         schema = {
