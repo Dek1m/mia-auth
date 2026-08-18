@@ -76,7 +76,7 @@ def create_access_token(
     """
     now = time.time()
     payload = {
-        "sub": user_id,
+        "sub": str(user_id),
         "username": username,
         "perms_version": perms_version,
         "iat": now,
