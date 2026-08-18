@@ -88,7 +88,7 @@ class AuthModule(ModuleBase):
         database.register_schema("auth", DB_SCHEMA, schema_name="auth")
 
         # Создание провайдера и регистрация в DI
-        self._provider = AuthProvider(config=self._config, database=database)
+        self._provider = AuthProvider(config=self._config, database=database, log=state.log)
         state.services.register(AuthProvider, self._provider)
 
         # Регистрация AUTH_CORE_SCHEMA (идемпотентно)

@@ -41,9 +41,10 @@ class MockRow:
 
 
 class MockPool:
-    """Мок asyncpg pool для unit-тестов.
+    """Мок Database Provider для unit-тестов.
 
-    Поддерживает SELECT, INSERT, UPDATE, DELETE, JOIN, UNION, CTE (упрощённо).
+    Sync API (psycopg v3 compatible): execute, fetchrow, fetch, fetchval.
+    Поддерживает SELECT, INSERT, UPDATE, DELETE, RETURNING.
     """
 
     def __init__(self) -> None:
@@ -73,15 +74,7 @@ class MockPool:
                 return table
         return None
 
-    def _find_all_tables(self, query: str) -> list[str]:
-        q = query.lower()
-        found = []
-        for table in self._data:
-            if table in q:
-                found.append(table)
-        return found
-
-    async def execute(self, query: str, *params: Any) -> str:
+    def execute(self, query: str, *params: Any) -> str:
         q = query.lower().strip()
         if "insert into" in q:
             return self._do_insert(query, params)
@@ -91,44 +84,21 @@ class MockPool:
             return self._do_delete(query, params)
         return "OK"
 
-    async def fetchval(self, query: str, *params: Any) -> Any:
-        if "count(*)" in query.lower():
-            rows = await self.fetch(query, *params)
-            if rows:
-                return rows[0]["count"] if isinstance(rows[0], MockRow) else rows[0]
-            return 0
-        row = await self.fetchrow(query, *params)
-        if row is None:
-            return None
-        keys = list(row.keys())
-        return row[keys[0]] if keys else None
-
-    async def fetchrow(self, query: str, *params: Any) -> MockRow | None:
-        q = query.lower().strip()
-        # INSERT ... RETURNING
-        if "insert into" in q and "returning" in q:
-            table = self._find_table(query)
-            if not table:
-                return None
-            self._do_insert(query, params)
-            if table in self._data and self._data[table]:
-                last_id = list(self._data[table].keys())[-1]
-                return MockRow(self._data[table][last_id])
-            return None
-        # UPDATE ... RETURNING
-        if "update " in q and "returning" in q:
-            table = self._find_table(query)
-            if not table:
-                return None
-            updated_rows = self._do_update_returning(query, params)
-            return MockRow(updated_rows[0]) if updated_rows else None
-        rows = await self.fetch(query, *params)
+    def fetchrow(self, query: str, *params: Any) -> MockRow | None:
+        rows = self.fetch(query, *params)
         return rows[0] if rows else None
 
-    async def fetch(self, query: str, *params: Any) -> list[MockRow]:
-        q = query.lower().strip()
+    def fetchval(self, query: str, *params: Any) -> Any:
+        rows = self.fetch(query, *params)
+        if not rows:
+            return None
+        if "count(*)" in query.lower():
+            return rows[0].get("count", 0)
+        keys = list(rows[0].keys()) if rows else []
+        return rows[0][keys[0]] if keys else None
 
-        # INSERT ... RETURNING — выполняем вставку и возвращаем строку
+    def fetch(self, query: str, *params: Any) -> list[MockRow]:
+        q = query.lower().strip()
         if "insert into" in q and "returning" in q:
             table = self._find_table(query)
             if not table:
@@ -138,219 +108,56 @@ class MockPool:
                 last_id = list(self._data[table].keys())[-1]
                 return [MockRow(self._data[table][last_id])]
             return []
-
-        # UPDATE ... RETURNING — выполняем обновление и возвращаем строки
         if "update " in q and "returning" in q:
             table = self._find_table(query)
             if not table:
                 return []
-            updated_rows = self._do_update_returning(query, params)
-            return [MockRow(r) for r in updated_rows]
-
-        # CTE (WITH RECURSIVE) — упрощённая поддержка
+            return [MockRow(r) for r in self._do_update_returning(query, params)]
         if "with recursive" in q or "with " in q:
-            return await self._handle_cte(query, params)
-
-        # UNION — разбиваем и объединяем
+            return []
         if " union " in q:
-            return await self._handle_union(query, params)
-
+            return []
         table = self._find_table(query)
-        if not table:
+        if table is None:
             return []
+        # WHERE clause
+        where_idx = q.find(" where ")
+        if where_idx >= 0:
+            where_clause = q[where_idx + 7:]
+            return [
+                MockRow(row) for row in self._data[table].values()
+                if self._match_where(row, where_clause, params)
+            ]
+        return [MockRow(row) for row in self._data[table].values()]
 
-        all_rows = list(self._data[table].values())
-
-        # COUNT(*) без WHERE
-        if "count(*)" in q and "where" not in q:
-            return [MockRow({"count": len(all_rows)})]
-
-        # WHERE фильтрация
-        if "where" in q:
-            # Проверяем наличие OR в WHERE
-            where_idx = q.index("where")
-            where_part = q[where_idx + 5:]
-            for keyword in ("order by", "limit", "offset", "group by"):
-                if keyword in where_part:
-                    where_part = where_part.split(keyword)[0]
-            if " or " in where_part:
-                # OR условия: собираем все field=value пары
-                or_conditions = []
-                for match in re.finditer(r'(\w+)\s*(?:=|ilike)\s*\$(\d+)', where_part):
-                    field = match.group(1)
-                    param_idx = int(match.group(2)) - 1
-                    if 0 <= param_idx < len(params):
-                        or_conditions.append((field, params[param_idx]))
-                all_rows = [r for r in all_rows if self._match_any_field(r, or_conditions)]
-            else:
-                conditions = self._extract_conditions(query, params)
-                all_rows = [r for r in all_rows if self._match(r, conditions)]
-
-        # COUNT с WHERE
-        if "count(*)" in q:
-            return [MockRow({"count": len(all_rows)})]
-
-        # ORDER BY
-        if "order by" in q:
-            desc = "desc" in q
-            all_rows.sort(key=lambda r: r.get("created_at", ""), reverse=desc)
-
-        # LIMIT
-        m = re.search(r'limit\s+\$?\d+', q)
-        if m:
-            limit_str = m.group(0).split()[-1]
-            if limit_str.startswith("$"):
-                idx = int(limit_str[1:]) - 1
-                if idx < len(params):
-                    all_rows = all_rows[:params[idx]]
-            else:
-                all_rows = all_rows[:int(limit_str)]
-
-        # OFFSET
-        m = re.search(r'offset\s+\$?\d+', q)
-        if m:
-            offset_str = m.group(0).split()[-1]
-            if offset_str.startswith("$"):
-                idx = int(offset_str[1:]) - 1
-                if idx < len(params):
-                    all_rows = all_rows[params[idx]:]
-
-        return [MockRow(r) for r in all_rows]
-
-    async def _handle_cte(self, query: str, params: tuple) -> list[MockRow]:
-        """Упрощённая поддержка CTE запросов.
-
-        Обрабатывает:
-        - SELECT с JOIN через CTE
-        - GROUP BY + COUNT
-        - UNION в CTE
-        """
-        q = query.lower()
-
-        # Определяем целевую таблицу (из FROM после CTE)
-        # Простая эвристика: ищем FROM <table> после всех CTE
-        main_table = None
-        for table in self._data:
-            # Ищем "FROM auth.XXX" или "JOIN auth.XXX" в финальном SELECT
-            if f"from {table}" in q or f"join {table}" in q:
-                main_table = table
-                break
-
-        if not main_table:
-            # Fallback: берём первую найденную таблицу
-            tables = self._find_all_tables(query)
-            main_table = tables[0] if tables else None
-
-        if not main_table:
-            return []
-
-        # Собираем все данные из вовлечённых таблиц
-        all_rows = list(self._data[main_table].values())
-
-        # WHERE фильтрация
-        if "where" in q:
-            conditions = self._extract_conditions(query, params)
-            all_rows = [r for r in all_rows if self._match(r, conditions)]
-
-        # GROUP BY — группировка
-        if "group by" in q:
-            return self._handle_group_by(query, all_rows)
-
-        # UNION — собираем данные из всех таблиц
-        if "union" in q:
-            return await self._handle_union(query, params)
-
-        # DISTINCT
-        if "select distinct" in q:
-            seen = set()
-            unique = []
-            for row in all_rows:
-                key = str(sorted(row.items()))
-                if key not in seen:
-                    seen.add(key)
-                    unique.append(row)
-            all_rows = unique
-
-        # ORDER BY
-        if "order by" in q:
-            desc = "desc" in q
-            # Определяем поле для сортировки
-            order_match = re.search(r'order by\s+(\w+)', q)
-            if order_match:
-                field = order_match.group(1)
-                all_rows.sort(key=lambda r: r.get(field, ""), reverse=desc)
-
-        return [MockRow(r) for r in all_rows]
-
-    def _handle_group_by(self, query: str, rows: list[dict]) -> list[MockRow]:
-        """Обработка GROUP BY."""
-        q = query.lower()
-        # COUNT(*) + GROUP BY → количество уникальных групп
-        if "count(*)" in q:
-            return [MockRow({"count": len(rows)})]
-        return [MockRow(r) for r in rows]
-
-    async def _handle_union(self, query: str, params: tuple) -> list[MockRow]:
-        """Обработка UNION запросов."""
-        # Разбиваем по UNION
-        parts = re.split(r'\bunion\b', query, flags=re.IGNORECASE)
-        all_results = []
+    def _match_where(self, row: dict, where_clause: str, params: tuple) -> bool:
+        """Проверяет row по WHERE clause."""
+        conditions = self._extract_conditions_from_where(where_clause, params)
+        return self._match(row, conditions)
+    
+    def _extract_conditions_from_where(self, where_clause: str, params: tuple) -> list:
+        """Извлечь условия из WHERE clause."""
+        conditions = []
+        parts = where_clause.split(" and ")
+        param_idx = 0
         for part in parts:
             part = part.strip()
-            if not part:
-                continue
-            rows = await self.fetch(part, *params)
-            all_results.extend(rows)
-
-        # DISTINCT по id если есть
-        seen_ids = set()
-        unique = []
-        for row in all_results:
-            row_dict = row._data if isinstance(row, MockRow) else row
-            row_id = row_dict.get("id", str(row_dict))
-            if row_id not in seen_ids:
-                seen_ids.add(row_id)
-                unique.append(row)
-
-        return unique
-
-    def _extract_conditions(self, query: str, params: tuple) -> list[tuple[str, Any]]:
-        """Извлекает WHERE условия. Возвращает (field, value) для AND условий."""
-        conditions = []
-        q = query.lower()
-        if "where" not in q:
-            return conditions
-
-        where_part = q.split("where", 1)[1]
-        for keyword in ("order by", "limit", "offset", "group by"):
-            if keyword in where_part:
-                where_part = where_part.split(keyword)[0]
-
-        # field = $N or field ILIKE $N
-        for match in re.finditer(r'(\w+)\s*(?:=|ilike)\s*\$(\d+)', where_part):
-            field = match.group(1)
-            param_idx = int(match.group(2)) - 1
-            if 0 <= param_idx < len(params):
-                conditions.append((field, params[param_idx]))
-
-        # field IN ($N, $2, ...)
-        in_pattern = re.compile(r'(\w+)\s+in\s*\(([^)]+)\)')
-        for match in in_pattern.finditer(where_part):
-            field = match.group(1)
-            params_str = match.group(2)
-            param_nums = re.findall(r'\$(\d+)', params_str)
-            values = []
-            for pnum in param_nums:
-                pidx = int(pnum) - 1
-                if 0 <= pidx < len(params):
-                    val = params[pidx]
-                    if isinstance(val, (list, tuple)):
-                        values.extend(val)
-                    else:
-                        values.append(val)
-            if values:
-                conditions.append((field, values))
-
+            if "=" in part:
+                col, val = part.split("=", 1)
+                col = col.strip()
+                val = val.strip()
+                if val.startswith("%s") or val.startswith("$"):
+                    if param_idx < len(params):
+                        conditions.append((col, params[param_idx]))
+                        param_idx += 1
+                else:
+                    val = val.strip("'")
+                    # Конвертируем SQL boolean в Python
+                    if val.upper() == "TRUE":
+                        val = True
+                    elif val.upper() == "FALSE":
+                        val = False
+                    conditions.append((col, val))
         return conditions
 
     def _match(self, row: dict, conditions: list) -> bool:
@@ -385,30 +192,19 @@ class MockPool:
                         return False
         return True
 
-    def _match_any_field(self, row: dict, field_value_pairs: list[tuple[str, Any]]) -> bool:
-        """Проверяет row по OR условиям: хотя бы одно поле должно совпасть."""
-        for field, value in field_value_pairs:
-            row_val = row.get(field)
-            if row_val is None:
-                continue
-            if isinstance(value, str) and isinstance(row_val, str):
-                if value.startswith("%") and value.endswith("%"):
-                    search = value[1:-1]
-                    if search.lower() in row_val.lower():
-                        return True
-                elif value.startswith("%"):
-                    search = value[1:]
-                    if row_val.lower().endswith(search.lower()):
-                        return True
-                elif value.endswith("%"):
-                    search = value[:-1]
-                    if row_val.lower().startswith(search.lower()):
-                        return True
-                elif row_val == value:
-                    return True
-            elif row_val == value:
-                return True
-        return False
+    def _extract_conditions(self, query: str, params: tuple) -> list:
+        """Извлечь условия из WHERE clause в запросе."""
+        q = query.lower()
+        where_idx = q.find(" where ")
+        if where_idx < 0:
+            return []
+        where_clause = q[where_idx + 7:]
+        # Считаем количество %s в SET (до WHERE)
+        set_part = q[:where_idx]
+        set_params_count = set_part.count("%s")
+        # Передаём только WHERE параметры
+        where_params = params[set_params_count:] if set_params_count > 0 else params
+        return self._extract_conditions_from_where(where_clause, where_params)
 
     def _do_insert(self, query: str, params: tuple) -> str:
         """Вставка записи."""
@@ -427,9 +223,10 @@ class MockPool:
         row: dict[str, Any] = {"id": row_id}
 
         for i, col in enumerate(columns):
-            if col == "id":
-                continue
-            if i < len(params):
+            if col == "id" and i < len(params) and params[i]:
+                row_id = params[i]
+                row["id"] = row_id
+            elif i < len(params):
                 row[col] = params[i]
 
         # ON CONFLICT

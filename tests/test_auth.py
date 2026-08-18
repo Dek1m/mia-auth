@@ -10,7 +10,9 @@ from modules.auth.password import hash_password
 
 @pytest.fixture
 def provider(mock_pool, auth_config) -> AuthProvider:
-    return AuthProvider(config=auth_config, database=mock_pool)
+    from modules.log import Log
+    log = Log(level="WARNING", format="posix")
+    return AuthProvider(config=auth_config, database=mock_pool, log=log)
 
 
 @pytest.mark.asyncio
