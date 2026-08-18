@@ -212,7 +212,7 @@ class AuthProvider:
             last_name=last_name,
         )
 
-        self._log.info("User created", extra={"user_id": user["id"], "username": username})
+        self._log.info("User created", extra={"user_id": str(user["id"]), "username": username})
         return user
 
     async def update_user(self, user_id: str, data: dict[str, Any]) -> dict[str, Any] | None:
@@ -464,7 +464,7 @@ class AuthProvider:
 
         self._log.info(
             "User logged in",
-            extra={"user_id": user["id"], "username": username},
+            extra={"user_id": str(user["id"]), "username": username},
         )
 
         return {
@@ -511,7 +511,7 @@ class AuthProvider:
                 await self._repo.revoke_family(family_id)
             self._log.warning(
                 "Refresh token reuse detected",
-                extra={"session_id": session["id"], "user_id": session["user_id"]},
+                extra={"session_id": str(session["id"]), "user_id": str(session["user_id"])},
             )
             raise ReuseDetectedError()
 
@@ -587,7 +587,7 @@ class AuthProvider:
             return False
 
         await self._repo.revoke_session(session["id"])
-        self._log.info("User logged out", extra={"user_id": session["user_id"]})
+        self._log.info("User logged out", extra={"user_id": str(session["user_id"])})
         return True
 
     # ─────────────────────────────────────────────
