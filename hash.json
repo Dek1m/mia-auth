@@ -1,18 +1,18 @@
 {
   "version": "2.0.0",
   "files": {
-    "__init__.py": "ee0a490dcfbc10188855f43392388938ebe7902e0b213cb81b4be047eebb203f",
+    "__init__.py": "86fa741a4dffebc1673fd35c05c7df800c77964e5963567d50aa2a1443c70e43",
     "bootstrap.py": "03c8a09344c8fc83f7b61bbe6ed339102ed9b5f762905ae827f6ec93737f2012",
     "config.py": "47ca9fa66296db8392e90f70fd67dc580597c807795acbdfe1598d8eda54514d",
     "decorators.py": "bbde6ff23093d7936fc80af120ec36d59abc5c05bd1db85ba1b2c7fc3620ac6f",
     "jwt.py": "4fc5366417393a91d41847cb543f18a6dcc5a99a1701f87315f32232130270cd",
     "password.py": "86c65577ed3f8196ce4bfb281fc6d5988c347529e9fd73eb6180c1d75ba4f5b6",
     "permissions_cache.py": "5218ae809e02e17bf176f685fd12919223b28e10d2fa74e7191b45ef1bd3a87f",
-    "provider.py": "daf7e4765a72d0b860142ee89dd501ee1119bf3b9f08c289847b2036eb4f8646",
+    "provider.py": "50868a225b770bad68cd7fdd481c06313ec718e8023d1406d53e27ee244d56a5",
     "repository.py": "dab299bc0d31aefaa82c2cfbcecb19747abb4a8dc4cde72d0470bfef96980a96",
     "schema.py": "07a3237b4e2f9de6ffc0c44edc1ba31dc6c975223e8736ea2b192d2ae8ee4f16",
-    "schema_registry.py": "a23ed70a8f59def781a3413327abc5195fec40a06a67651e906a78ff834cd758",
-    "schemas.py": "2c2fba751e607adc9dddc575d4d2c00e082234e4c8af3f835483ecba1e123655",
+    "schema_registry.py": "e453a7b83bbcbc33807f91e991e3dd390c8737b7f73173f20a3410c414f73e5f",
+    "schemas.py": "f31b920ca8cfe8396ab1990d2d510d96c002f66915bb550300550d25328fe8ed",
     "tests/__init__.py": "70600204fcb77bbc85a50a0ed1116b1a62a1cc594562589fcbf86ccd3c90af5f",
     "tests/conftest.py": "f4d45935961af2d8869de9f3465dff7307b3251e059d4f4f3332537b9b6c229a",
     "tests/test_auth.py": "4ac1aa434194d8d283dadc4d6650d5f6deb4c3c25b22404aee9d757b0329af86",
@@ -26,5 +26,5 @@
     "tests/test_schema_registry.py": "72171ae5c7166cc28d65ed06ca354491dabd409644c261dbdad746cb789cbdf9",
     "validators.py": "636ce38a95674eec70cf6bfe30a93824faee6e7b9e44fab76b65bc1cd7b7f508"
   },
-  "manifest_hash": "e80fda899f7c1c9664492417597d789d4cc50247561d48dbbbe708ca3025f748"
+  "manifest_hash": "a577a68f11502406e5e3531035a0e3396e92eb223ec870534fde889cbfb49eee"
 }
