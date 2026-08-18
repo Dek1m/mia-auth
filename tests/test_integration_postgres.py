@@ -15,25 +15,24 @@ import pytest
 # Skip all tests if PG is not available
 PG_AVAILABLE = False
 try:
-    import asyncpg  # noqa: F401
+    import psycopg  # noqa: F401
     import asyncio
 
-    async def _check_pg() -> bool:
+    def _check_pg() -> bool:
         try:
-            conn = await asyncpg.connect(
+            conn = psycopg.connect(
                 host=os.getenv("MIA_TEST_PG_HOST", "localhost"),
                 port=int(os.getenv("MIA_TEST_PG_PORT", "5432")),
-                user=os.getenv("MIA_TEST_PG_USER", "mia"),
-                password=os.getenv("MIA_TEST_PG_PASSWORD", "test"),
-                database=os.getenv("MIA_TEST_PG_DB", "mia"),
+                user=os.getenv("MIA_TEST_PG_USER", "svc_athene_ai"),
+                password=os.getenv("MIA_TEST_PG_PASSWORD", ""),
+                dbname=os.getenv("MIA_TEST_PG_DB", "belle"),
             )
-            await conn.execute("SELECT 1")
-            await conn.close()
+            conn.close()
             return True
         except Exception:
             return False
 
-    PG_AVAILABLE = asyncio.get_event_loop().run_until_complete(_check_pg())
+    PG_AVAILABLE = _check_pg()
 except Exception:
     pass
 
