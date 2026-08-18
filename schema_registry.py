@@ -155,7 +155,7 @@ class AuthSchemaRegistry:
 
         log.info(
             "Auth schema registered",
-            extra={"module": module_name, "result": result},
+            extra={"module_name": module_name, "result": result},
         )
         return result
 
