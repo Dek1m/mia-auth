@@ -218,29 +218,29 @@ class TestUserCRUD:
     def test_create_and_get_user(self, auth_provider):
         """Create user and retrieve by ID."""
         
-        user = await auth_provider.create_user("testuser", "SecurePass123"))
+        user = await auth_provider.create_user("testuser", "SecurePass123")
         assert user["username"] == "testuser"
         
-        fetched = await auth_provider.get_user(user["id"]))
+        fetched = await auth_provider.get_user(user["id"])
         assert fetched is not None
         assert fetched["username"] == "testuser"
 
     def test_create_duplicate_user(self, auth_provider):
         """Duplicate username should raise ValueError."""
         
-        await auth_provider.create_user("admin", "SecurePass123"))
+        await auth_provider.create_user("admin", "SecurePass123")
         with pytest.raises(ValueError, match="already exists"):
-            await auth_provider.create_user("admin", "SecurePass123"))
+            await auth_provider.create_user("admin", "SecurePass123")
 
     def test_login_and_logout(self, auth_provider):
         """Login returns tokens, logout revokes session."""
         
-        await auth_provider.create_user("admin", "SecurePass123"))
-        result = await auth_provider.login("admin", "SecurePass123"))
+        await auth_provider.create_user("admin", "SecurePass123")
+        result = await auth_provider.login("admin", "SecurePass123")
         assert "access_token" in result
         assert "refresh_token" in result
         
-        logout_result = await auth_provider.logout(result["refresh_token"]))
+        logout_result = await auth_provider.logout(result["refresh_token"])
         assert logout_result is True
 
 
@@ -251,10 +251,10 @@ class TestRefreshTokenRotation:
     def test_refresh_creates_new_tokens(self, auth_provider):
         """Refresh should create new access + refresh tokens."""
         
-        await auth_provider.create_user("admin", "SecurePass123"))
-        login_result = await auth_provider.login("admin", "SecurePass123"))
+        await auth_provider.create_user("admin", "SecurePass123")
+        login_result = await auth_provider.login("admin", "SecurePass123")
         
-        refresh_result = await auth_provider.refresh_token(login_result["refresh_token"]))
+        refresh_result = await auth_provider.refresh_token(login_result["refresh_token"])
         assert "access_token" in refresh_result
         assert "refresh_token" in refresh_result
         assert refresh_result["refresh_token"] != login_result["refresh_token"]
@@ -262,19 +262,19 @@ class TestRefreshTokenRotation:
     def test_refresh_reuse_revokes_family(self, auth_provider):
         """Reusing old refresh token should revoke entire family."""
         
-        await auth_provider.create_user("admin", "SecurePass123"))
-        login_result = await auth_provider.login("admin", "SecurePass123"))
+        await auth_provider.create_user("admin", "SecurePass123")
+        login_result = await auth_provider.login("admin", "SecurePass123")
         
         # First refresh
-        refresh_result = await auth_provider.refresh_token(login_result["refresh_token"]))
+        refresh_result = await auth_provider.refresh_token(login_result["refresh_token"])
         
         # Try to reuse old token — should fail and revoke family
         with pytest.raises(Exception):
-            await auth_provider.refresh_token(login_result["refresh_token"]))
+            await auth_provider.refresh_token(login_result["refresh_token"])
         
         # New token should also be revoked
         with pytest.raises(Exception):
-            await auth_provider.refresh_token(refresh_result["refresh_token"]))
+            await auth_provider.refresh_token(refresh_result["refresh_token"])
 
 
 @pytest.mark.asyncio
@@ -307,7 +307,7 @@ class TestAuthSchemaRegistry:
             "permissions": [{"name": "test_idempotent:read", "description": "Read"}],
             "roles": [{"name": "test_idempotent_role", "description": "Role", "permissions": ["test_idempotent:read"]}],
         }
-        result1 = await auth_provider.registry.register("test_module", schema, is_builtin=False))
-        result2 = await auth_provider.registry.register("test_module", schema, is_builtin=False))
+        result1 = await auth_provider.registry.register("test_module", schema, is_builtin=False)
+        result2 = await auth_provider.registry.register("test_module", schema, is_builtin=False)
         assert len(result1["created_permissions"]) == 1
         assert len(result2["updated_permissions"]) == 1
