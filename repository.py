@@ -610,7 +610,7 @@ class AuthRepository:
             "  SELECT ur.role_id FROM auth.user_roles ur WHERE ur.user_id = %s "
             "  UNION "
             "  SELECT gr.role_id FROM auth.group_roles gr "
-            "            WHERE gr.group_id IN (SELECT group_id FROM group_hierarchy)"
+            "  WHERE gr.group_id IN (SELECT group_id FROM group_hierarchy)"
             ")",
             user_id, user_id,
         ) or 0
@@ -625,7 +625,7 @@ class AuthRepository:
             "  JOIN auth.user_group_membership ugm ON ugm.group_id = gr.group_id "
             "  WHERE ugm.user_id = %s"
             ")",
-            user_id,
+            user_id, user_id,
         ) or 0
 
         return perms_count * 1_000_000 + (max_updated % 1_000_000)
