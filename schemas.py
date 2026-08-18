@@ -75,10 +75,10 @@ DB_SCHEMA: dict[str, dict[str, Any]] = {
         "auto_id": False,
         "primary_key": ["user_id", "group_id"],
         "columns": {
-            "user_id": "UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE",
-            "group_id": "UUID NOT NULL REFERENCES groups(id) ON DELETE CASCADE",
+            "user_id": "UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE",
+            "group_id": "UUID NOT NULL REFERENCES auth.groups(id) ON DELETE CASCADE",
             "added_at": "TIMESTAMPTZ DEFAULT NOW()",
-            "added_by": "UUID REFERENCES users(id)",
+            "added_by": "UUID REFERENCES auth.users(id)",
         },
     },
     # ── Связь группы ↔ группы (иерархия) ──────────────────────
@@ -86,8 +86,8 @@ DB_SCHEMA: dict[str, dict[str, Any]] = {
         "auto_id": False,
         "primary_key": ["parent_group_id", "child_group_id"],
         "columns": {
-            "parent_group_id": "UUID NOT NULL REFERENCES groups(id) ON DELETE CASCADE",
-            "child_group_id": "UUID NOT NULL REFERENCES groups(id) ON DELETE CASCADE",
+            "parent_group_id": "UUID NOT NULL REFERENCES auth.groups(id) ON DELETE CASCADE",
+            "child_group_id": "UUID NOT NULL REFERENCES auth.groups(id) ON DELETE CASCADE",
             "created_at": "TIMESTAMPTZ DEFAULT NOW()",
         },
     },
@@ -96,8 +96,8 @@ DB_SCHEMA: dict[str, dict[str, Any]] = {
         "auto_id": False,
         "primary_key": ["group_id", "role_id"],
         "columns": {
-            "group_id": "UUID NOT NULL REFERENCES groups(id) ON DELETE CASCADE",
-            "role_id": "UUID NOT NULL REFERENCES roles(id) ON DELETE CASCADE",
+            "group_id": "UUID NOT NULL REFERENCES auth.groups(id) ON DELETE CASCADE",
+            "role_id": "UUID NOT NULL REFERENCES auth.roles(id) ON DELETE CASCADE",
             "created_at": "TIMESTAMPTZ DEFAULT NOW()",
         },
     },
@@ -106,10 +106,10 @@ DB_SCHEMA: dict[str, dict[str, Any]] = {
         "auto_id": False,
         "primary_key": ["user_id", "role_id"],
         "columns": {
-            "user_id": "UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE",
-            "role_id": "UUID NOT NULL REFERENCES roles(id) ON DELETE CASCADE",
+            "user_id": "UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE",
+            "role_id": "UUID NOT NULL REFERENCES auth.roles(id) ON DELETE CASCADE",
             "granted_at": "TIMESTAMPTZ DEFAULT NOW()",
-            "granted_by": "UUID REFERENCES users(id)",
+            "granted_by": "UUID REFERENCES auth.users(id)",
         },
     },
     # ── Связь роли ↔ разрешения ───────────────────────────────
@@ -117,15 +117,15 @@ DB_SCHEMA: dict[str, dict[str, Any]] = {
         "auto_id": False,
         "primary_key": ["role_id", "permission_id"],
         "columns": {
-            "role_id": "UUID NOT NULL REFERENCES roles(id) ON DELETE CASCADE",
-            "permission_id": "UUID NOT NULL REFERENCES permissions(id) ON DELETE CASCADE",
+            "role_id": "UUID NOT NULL REFERENCES auth.roles(id) ON DELETE CASCADE",
+            "permission_id": "UUID NOT NULL REFERENCES auth.permissions(id) ON DELETE CASCADE",
         },
     },
     # ── Сессии ────────────────────────────────────────────────
     "auth_sessions": {
         "columns": {
             "id": "UUID PRIMARY KEY DEFAULT gen_random_uuid()",
-            "user_id": "UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE",
+            "user_id": "UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE",
             "access_token_hash": "VARCHAR(64)",
             "access_expires_at": "TIMESTAMPTZ",
             "refresh_token_hash": "VARCHAR(64)",
@@ -143,7 +143,7 @@ DB_SCHEMA: dict[str, dict[str, Any]] = {
     "password_history": {
         "columns": {
             "id": "UUID PRIMARY KEY DEFAULT gen_random_uuid()",
-            "user_id": "UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE",
+            "user_id": "UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE",
             "password_hash": "TEXT NOT NULL",
             "created_at": "TIMESTAMPTZ DEFAULT NOW()",
         },

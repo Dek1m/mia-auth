@@ -3,7 +3,7 @@
 -- Триггер update_updated_at: автоматическое обновление updated_at
 
 DO $$ BEGIN
-    -- Триггер: проверка циклов в group_group_membership
+    -- Триггер: проверка циклов в auth.group_group_membership
     IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'check_group_cycle') THEN
         CREATE OR REPLACE FUNCTION check_group_cycle_fn()
         RETURNS TRIGGER AS $fn$
@@ -13,11 +13,11 @@ DO $$ BEGIN
             -- Рекурсивный обход предков через CTE
             WITH RECURSIVE ancestors AS (
                 SELECT parent_group_id AS gid
-                FROM group_group_membership
+                FROM auth.group_group_membership
                 WHERE child_group_id = NEW.parent_group_id
                 UNION ALL
                 SELECT ggm.parent_group_id
-                FROM group_group_membership ggm
+                FROM auth.group_group_membership ggm
                 JOIN ancestors a ON ggm.child_group_id = a.gid
             )
             SELECT EXISTS(
@@ -34,7 +34,7 @@ DO $$ BEGIN
         $fn$ LANGUAGE plpgsql;
 
         CREATE TRIGGER check_group_cycle
-            BEFORE INSERT OR UPDATE ON auth.group_group_membership
+            BEFORE INSERT OR UPDATE ON auth.auth.group_group_membership
             FOR EACH ROW
             EXECUTE FUNCTION check_group_cycle_fn();
     END IF;
