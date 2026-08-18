@@ -29,10 +29,135 @@ class AuthSchemaRegistry:
     def __init__(self, database: Any) -> None:
         self._database = database
 
-    async def _fetchrow(self, query: str, *params: Any) -> dict[str, Any] | None:
+    def _fetchrow(self, query: str, *params: Any) -> dict[str, Any] | None:
         """Получить одну строку или None."""
         rows = self._database.fetch(query, *params)
         return dict(rows[0]) if rows else None
+
+    def register_sync(
+        self,
+        module_name: str,
+        schema: dict[str, list[dict[str, Any]]],
+        is_builtin: bool = False,
+    ) -> dict[str, list[str]]:
+        """Синхронная версия register для on_load."""
+        permissions = schema.get("permissions", [])
+        roles = schema.get("roles", [])
+
+        self._validate_permissions(module_name, permissions)
+        self._validate_roles(module_name, roles, permissions)
+
+        result = {
+            "created_permissions": [],
+            "updated_permissions": [],
+            "created_roles": [],
+            "updated_roles": [],
+        }
+
+        # Permissions
+        for perm in permissions:
+            name = perm["name"]
+            description = perm.get("description", "")
+
+            existing = self._fetchrow(
+                "SELECT source_module FROM auth.permissions WHERE name = %s",
+                name,
+            )
+
+            if existing is not None:
+                existing_module = existing["source_module"]
+                if existing_module and existing_module != module_name:
+                    raise ValueError(
+                        f"Permission '{name}' already belongs to module '{existing_module}'. "
+                        f"Module '{module_name}' cannot overwrite it."
+                    )
+
+            self._database.execute(
+                "INSERT INTO auth.permissions (name, description, is_builtin, source_module, updated_at) "
+                "VALUES (%s, %s, %s, %s, NOW()) "
+                "ON CONFLICT (name) DO UPDATE SET "
+                "description = EXCLUDED.description, "
+                "is_builtin = EXCLUDED.is_builtin, "
+                "source_module = EXCLUDED.source_module, "
+                "updated_at = NOW()",
+                name, description, is_builtin, module_name,
+            )
+
+            if existing is None:
+                result["created_permissions"].append(name)
+            else:
+                result["updated_permissions"].append(name)
+
+        # Roles
+        for role in roles:
+            name = role["name"]
+            description = role.get("description", "")
+            role_perms = role.get("permissions", [])
+
+            existing = self._fetchrow(
+                "SELECT source_module FROM auth.roles WHERE name = %s",
+                name,
+            )
+
+            if existing is not None:
+                existing_module = existing["source_module"]
+                if existing_module and existing_module != module_name:
+                    raise ValueError(
+                        f"Role '{name}' already belongs to module '{existing_module}'. "
+                        f"Module '{module_name}' cannot overwrite it."
+                    )
+
+            self._database.execute(
+                "INSERT INTO auth.roles (name, description, is_builtin, source_module, updated_at) "
+                "VALUES (%s, %s, %s, %s, NOW()) "
+                "ON CONFLICT (name) DO UPDATE SET "
+                "description = EXCLUDED.description, "
+                "is_builtin = EXCLUDED.is_builtin, "
+                "source_module = EXCLUDED.source_module, "
+                "updated_at = NOW()",
+                name, description, is_builtin, module_name,
+            )
+
+            role_row = self._fetchrow(
+                "SELECT id FROM auth.roles WHERE name = %s",
+                name,
+            )
+
+            if role_row is None:
+                continue
+
+            role_id = role_row["id"]
+
+            self._database.execute(
+                "DELETE FROM auth.role_permissions WHERE role_id = %s",
+                role_id,
+            )
+
+            for perm_name in role_perms:
+                perm_row = self._fetchrow(
+                    "SELECT id FROM auth.permissions WHERE name = %s",
+                    perm_name,
+                )
+                if perm_row is None:
+                    continue
+
+                self._database.execute(
+                    "INSERT INTO auth.role_permissions (role_id, permission_id, updated_at) "
+                    "VALUES (%s, %s, NOW()) "
+                    "ON CONFLICT (role_id, permission_id) DO UPDATE SET updated_at = NOW()",
+                    role_id, perm_row["id"],
+                )
+
+            if existing is None:
+                result["created_roles"].append(name)
+            else:
+                result["updated_roles"].append(name)
+
+        log.info(
+            "Auth schema registered",
+            extra={"module": module_name, "result": result},
+        )
+        return result
 
     async def register(
         self,
@@ -40,20 +165,8 @@ class AuthSchemaRegistry:
         schema: dict[str, list[dict[str, Any]]],
         is_builtin: bool = False,
     ) -> dict[str, list[str]]:
-        """Зарегистрировать permissions и роли модуля.
-
-        Args:
-            module_name: Имя модуля (namespace для permission names).
-            schema: {"permissions": [...], "roles": [...]}.
-            is_builtin: True для встроенных модулей (auth).
-
-        Returns:
-            Сводка: {created_permissions, updated_permissions, created_roles, updated_roles}.
-
-        Raises:
-            ValueError: При нарушении правил валидации.
-        """
-        permissions = schema.get("permissions", [])
+        """Зарегистрировать permissions и роли модуля (async обёртка)."""
+        return self.register_sync(module_name, schema, is_builtin)
         roles = schema.get("roles", [])
 
         # Предварительная валидация

@@ -79,24 +79,19 @@ class AuthModule(ModuleBase):
         """Инициализация модуля: создаёт провайдер и регистрирует в DI."""
         # Получаем Database Provider из State
         from modules.db.provider import DatabaseProvider
+        from modules.auth.schemas import DB_SCHEMA
 
         database = state.services.resolve(DatabaseProvider)
+
+        # Создание таблиц auth (идемпотентно)
+        database.register_schema("auth", DB_SCHEMA, schema_name="auth")
 
         # Создание провайдера и регистрация в DI
         self._provider = AuthProvider(config=self._config, database=database)
         state.services.register(AuthProvider, self._provider)
 
         # Регистрация AUTH_CORE_SCHEMA (идемпотентно)
-        async def _init_auth_schema() -> None:
-            await self._provider.initialize()
-
-        # Выполняем в event loop (on_load вызывается синхронно)
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            # Если loop уже запущен — планируем coroutine
-            asyncio.ensure_future(_init_auth_schema())
-        else:
-            loop.run_until_complete(_init_auth_schema())
+        self._provider.initialize_sync()
 
         log.info("AuthModule loaded (Phase 1: PostgreSQL)")
 

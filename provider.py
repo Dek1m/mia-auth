@@ -157,6 +157,13 @@ class AuthProvider:
         await self._registry.register("auth", AUTH_CORE_SCHEMA, is_builtin=True)
         log.info("Auth schema registered")
 
+    def initialize_sync(self) -> None:
+        """Синхронная версия initialize для on_load."""
+        if self._registry is None:
+            return
+        self._registry.register_sync("auth", AUTH_CORE_SCHEMA, is_builtin=True)
+        log.info("Auth schema registered")
+
     # ─────────────────────────────────────────────
     # Пользователи (CRUD)
     # ─────────────────────────────────────────────
