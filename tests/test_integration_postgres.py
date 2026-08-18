@@ -174,6 +174,7 @@ def auth_provider(pg_pool):
 # ── Tests ─────────────────────────────────────────────────
 
 
+@pytest.mark.asyncio
 class TestRegisterSchema:
     """register_schema: DDL creates tables, idempotent on second call."""
 
@@ -210,77 +211,80 @@ class TestRegisterSchema:
         db_provider.register_schema("auth", DB_SCHEMA, schema_name="auth")  # Second call
 
 
+@pytest.mark.asyncio
 class TestUserCRUD:
     """User CRUD through AuthProvider with real PostgreSQL."""
 
     def test_create_and_get_user(self, auth_provider):
         """Create user and retrieve by ID."""
-        import asyncio
-        user = asyncio.run(auth_provider.create_user("testuser", "SecurePass123"))
+        
+        user = await auth_provider.create_user("testuser", "SecurePass123"))
         assert user["username"] == "testuser"
         
-        fetched = asyncio.run(auth_provider.get_user(user["id"]))
+        fetched = await auth_provider.get_user(user["id"]))
         assert fetched is not None
         assert fetched["username"] == "testuser"
 
     def test_create_duplicate_user(self, auth_provider):
         """Duplicate username should raise ValueError."""
-        import asyncio
-        asyncio.run(auth_provider.create_user("admin", "SecurePass123"))
+        
+        await auth_provider.create_user("admin", "SecurePass123"))
         with pytest.raises(ValueError, match="already exists"):
-            asyncio.run(auth_provider.create_user("admin", "SecurePass123"))
+            await auth_provider.create_user("admin", "SecurePass123"))
 
     def test_login_and_logout(self, auth_provider):
         """Login returns tokens, logout revokes session."""
-        import asyncio
-        asyncio.run(auth_provider.create_user("admin", "SecurePass123"))
-        result = asyncio.run(auth_provider.login("admin", "SecurePass123"))
+        
+        await auth_provider.create_user("admin", "SecurePass123"))
+        result = await auth_provider.login("admin", "SecurePass123"))
         assert "access_token" in result
         assert "refresh_token" in result
         
-        logout_result = asyncio.run(auth_provider.logout(result["refresh_token"]))
+        logout_result = await auth_provider.logout(result["refresh_token"]))
         assert logout_result is True
 
 
+@pytest.mark.asyncio
 class TestRefreshTokenRotation:
     """Refresh token rotation through AuthProvider."""
 
     def test_refresh_creates_new_tokens(self, auth_provider):
         """Refresh should create new access + refresh tokens."""
-        import asyncio
-        asyncio.run(auth_provider.create_user("admin", "SecurePass123"))
-        login_result = asyncio.run(auth_provider.login("admin", "SecurePass123"))
         
-        refresh_result = asyncio.run(auth_provider.refresh_token(login_result["refresh_token"]))
+        await auth_provider.create_user("admin", "SecurePass123"))
+        login_result = await auth_provider.login("admin", "SecurePass123"))
+        
+        refresh_result = await auth_provider.refresh_token(login_result["refresh_token"]))
         assert "access_token" in refresh_result
         assert "refresh_token" in refresh_result
         assert refresh_result["refresh_token"] != login_result["refresh_token"]
 
     def test_refresh_reuse_revokes_family(self, auth_provider):
         """Reusing old refresh token should revoke entire family."""
-        import asyncio
-        asyncio.run(auth_provider.create_user("admin", "SecurePass123"))
-        login_result = asyncio.run(auth_provider.login("admin", "SecurePass123"))
+        
+        await auth_provider.create_user("admin", "SecurePass123"))
+        login_result = await auth_provider.login("admin", "SecurePass123"))
         
         # First refresh
-        refresh_result = asyncio.run(auth_provider.refresh_token(login_result["refresh_token"]))
+        refresh_result = await auth_provider.refresh_token(login_result["refresh_token"]))
         
         # Try to reuse old token — should fail and revoke family
         with pytest.raises(Exception):
-            asyncio.run(auth_provider.refresh_token(login_result["refresh_token"]))
+            await auth_provider.refresh_token(login_result["refresh_token"]))
         
         # New token should also be revoked
         with pytest.raises(Exception):
-            asyncio.run(auth_provider.refresh_token(refresh_result["refresh_token"]))
+            await auth_provider.refresh_token(refresh_result["refresh_token"]))
 
 
+@pytest.mark.asyncio
 class TestAuthSchemaRegistry:
     """AuthSchemaRegistry: permissions and roles registration."""
 
     def test_register_permissions(self, auth_provider):
         """Register permissions via AuthSchemaRegistry."""
-        import asyncio
-        result = asyncio.run(auth_provider.registry.register(
+        
+        result = await auth_provider.registry.register(
             "test_module",
             {
                 "permissions": [
@@ -298,12 +302,12 @@ class TestAuthSchemaRegistry:
 
     def test_register_idempotent(self, auth_provider):
         """Second registration should update, not duplicate."""
-        import asyncio
+        
         schema = {
             "permissions": [{"name": "test_idempotent:read", "description": "Read"}],
             "roles": [{"name": "test_idempotent_role", "description": "Role", "permissions": ["test_idempotent:read"]}],
         }
-        result1 = asyncio.run(auth_provider.registry.register("test_module", schema, is_builtin=False))
-        result2 = asyncio.run(auth_provider.registry.register("test_module", schema, is_builtin=False))
+        result1 = await auth_provider.registry.register("test_module", schema, is_builtin=False))
+        result2 = await auth_provider.registry.register("test_module", schema, is_builtin=False))
         assert len(result1["created_permissions"]) == 1
         assert len(result2["updated_permissions"]) == 1
