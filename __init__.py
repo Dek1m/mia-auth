@@ -53,6 +53,7 @@ class AuthModule(ModuleBase):
     @property
     def meta(self) -> ModuleMeta:
         return ModuleMeta(
+            dependencies=["log", "db"],
             permissions={
                 "login": "auth.login",
                 "create_user": "auth.create_user",
