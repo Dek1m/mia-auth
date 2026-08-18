@@ -59,66 +59,16 @@ def _get_pool() -> psycopg_pool.ConnectionPool:
 
 
 def _setup_schema(pool: psycopg_pool.ConnectionPool) -> None:
-    """Create auth schema and tables if not exist."""
-    with pool.connection() as conn:
-        conn.execute("CREATE SCHEMA IF NOT EXISTS auth")
-        
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS auth.users (
-                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                username TEXT UNIQUE NOT NULL,
-                password_hash TEXT NOT NULL,
-                email TEXT,
-                first_name TEXT,
-                last_name TEXT,
-                description TEXT,
-                is_active BOOLEAN DEFAULT TRUE,
-                is_disabled BOOLEAN DEFAULT FALSE,
-                locked_until TIMESTAMPTZ,
-                login_attempts INTEGER DEFAULT 0,
-                last_login TIMESTAMPTZ,
-                disabled_at TIMESTAMPTZ,
-                enabled_at TIMESTAMPTZ,
-                custom_fields JSONB DEFAULT '{}',
-                created_at TIMESTAMPTZ DEFAULT NOW(),
-                updated_at TIMESTAMPTZ DEFAULT NOW()
-            )
-        """)
-        
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS auth.groups (
-                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                name TEXT UNIQUE NOT NULL,
-                description TEXT,
-                is_builtin BOOLEAN DEFAULT FALSE,
-                created_at TIMESTAMPTZ DEFAULT NOW(),
-                updated_at TIMESTAMPTZ DEFAULT NOW()
-            )
-        """)
-        
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS auth.roles (
-                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                name TEXT UNIQUE NOT NULL,
-                description TEXT,
-                is_builtin BOOLEAN DEFAULT FALSE,
-                source_module TEXT,
-                created_at TIMESTAMPTZ DEFAULT NOW(),
-                updated_at TIMESTAMPTZ DEFAULT NOW()
-            )
-        """)
-        
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS auth.permissions (
-                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                name TEXT UNIQUE NOT NULL,
-                description TEXT,
-                is_builtin BOOLEAN DEFAULT FALSE,
-                source_module TEXT,
-                created_at TIMESTAMPTZ DEFAULT NOW(),
-                updated_at TIMESTAMPTZ DEFAULT NOW()
-            )
-        """)
+    """Create auth schema and all tables via register_schema."""
+    from modules.auth.schemas import DB_SCHEMA
+    from modules.db.provider import DatabaseProvider
+    from modules.db.config import DatabaseConfig
+    from modules.log import Log
+    
+    log = Log(level="WARNING", format="posix")
+    db_config = DatabaseConfig()
+    db_provider = DatabaseProvider(pool=pool, config=db_config, log=log)
+    db_provider.register_schema("auth", DB_SCHEMA, schema_name="auth")
 
 
 def _cleanup_schema(pool: psycopg_pool.ConnectionPool) -> None:
