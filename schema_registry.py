@@ -31,7 +31,7 @@ class AuthSchemaRegistry:
 
     async def _fetchrow(self, query: str, *params: Any) -> dict[str, Any] | None:
         """Получить одну строку или None."""
-        rows = await self._database.fetch(query, *params)
+        rows = self._database.fetch(query, *params)
         return dict(rows[0]) if rows else None
 
     async def register(
@@ -74,7 +74,7 @@ class AuthSchemaRegistry:
 
             # Проверяем существование для определения created/updated
             existing = await self._fetchrow(
-                "SELECT source_module FROM auth.permissions WHERE name = $1",
+                "SELECT source_module FROM auth.permissions WHERE name = %s",
                 name,
             )
 
@@ -87,9 +87,9 @@ class AuthSchemaRegistry:
                         f"Module '{module_name}' cannot overwrite it."
                     )
 
-            await self._database.execute(
+            self._database.execute(
                 "INSERT INTO auth.permissions (name, description, is_builtin, source_module, updated_at) "
-                "VALUES ($1, $2, $3, $4, NOW()) "
+                "VALUES (%s, %s, %s, %s, NOW()) "
                 "ON CONFLICT (name) DO UPDATE SET "
                 "description = EXCLUDED.description, "
                 "is_builtin = EXCLUDED.is_builtin, "
@@ -113,7 +113,7 @@ class AuthSchemaRegistry:
             role_perms = role.get("permissions", [])
 
             existing = await self._fetchrow(
-                "SELECT source_module FROM auth.roles WHERE name = $1",
+                "SELECT source_module FROM auth.roles WHERE name = %s",
                 name,
             )
 
@@ -126,9 +126,9 @@ class AuthSchemaRegistry:
                         f"Module '{module_name}' cannot overwrite it."
                     )
 
-            await self._database.execute(
+            self._database.execute(
                 "INSERT INTO auth.roles (name, description, is_builtin, source_module, updated_at) "
-                "VALUES ($1, $2, $3, $4, NOW()) "
+                "VALUES (%s, %s, %s, %s, NOW()) "
                 "ON CONFLICT (name) DO UPDATE SET "
                 "description = EXCLUDED.description, "
                 "is_builtin = EXCLUDED.is_builtin, "
@@ -142,24 +142,24 @@ class AuthSchemaRegistry:
 
             # Пересборка role_permissions: DELETE существующих + INSERT
             role_row = await self._fetchrow(
-                "SELECT id FROM auth.roles WHERE name = $1",
+                "SELECT id FROM auth.roles WHERE name = %s",
                 name,
             )
             if role_row is not None:
                 role_id = role_row["id"]
-                await self._database.execute(
-                    "DELETE FROM auth.role_permissions WHERE role_id = $1",
+                self._database.execute(
+                    "DELETE FROM auth.role_permissions WHERE role_id = %s",
                     role_id,
                 )
                 for perm_name in role_perms:
                     perm_row = await self._fetchrow(
-                        "SELECT id FROM auth.permissions WHERE name = $1",
+                        "SELECT id FROM auth.permissions WHERE name = %s",
                         perm_name,
                     )
                     if perm_row is not None:
-                        await self._database.execute(
+                        self._database.execute(
                             "INSERT INTO auth.role_permissions (role_id, permission_id) "
-                            "VALUES ($1, $2) ON CONFLICT DO NOTHING",
+                            "VALUES (%s, %s) ON CONFLICT DO NOTHING",
                             role_id,
                             perm_row["id"],
                         )

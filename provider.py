@@ -165,13 +165,13 @@ class AuthProvider:
         """Получить пользователя по ID."""
         if self._repo is None:
             raise AuthError("Auth not initialized (no Database Provider)")
-        return await self._repo.get_user(user_id)
+        return self._repo.get_user(user_id)
 
     async def get_user_by_username(self, username: str) -> dict[str, Any] | None:
         """Получить пользователя по username."""
         if self._repo is None:
             raise AuthError("Auth not initialized (no Database Provider)")
-        return await self._repo.get_user_by_username(username)
+        return self._repo.get_user_by_username(username)
 
     async def create_user(
         self,
@@ -186,7 +186,7 @@ class AuthProvider:
             raise AuthError("Auth not initialized (no Database Provider)")
 
         # Проверка уникальности username
-        existing = await self._repo.get_user_by_username(username)
+        existing = self._repo.get_user_by_username(username)
         if existing:
             raise ValueError(f"User '{username}' already exists")
 
@@ -196,7 +196,7 @@ class AuthProvider:
         # Хеширование
         password_hashed = hash_password(password)
 
-        user = await self._repo.create_user(
+        user = self._repo.create_user(
             username=username,
             password_hash=password_hashed,
             email=email,
@@ -211,7 +211,7 @@ class AuthProvider:
         """Обновить пользователя."""
         if self._repo is None:
             raise AuthError("Auth not initialized (no Database Provider)")
-        result = await self._repo.update_user(user_id, data)
+        result = self._repo.update_user(user_id, data)
         if result and self._cache:
             self._cache.invalidate(user_id)
         return result
@@ -229,32 +229,32 @@ class AuthProvider:
             raise AuthError("Auth not initialized (no Database Provider)")
 
         # Проверка: последний system_admin
-        user = await self._repo.get_user(user_id)
+        user = self._repo.get_user(user_id)
         if not user:
             raise NotFoundError("User")
 
         # Проверяем, является ли пользователь system_admin
-        is_admin = await self._repo.is_user_admin(user_id)
+        is_admin = self._repo.is_user_admin(user_id)
         if is_admin:
-            admin_count = await self._repo.get_active_admin_count()
+            admin_count = self._repo.get_active_admin_count()
             if admin_count <= 1 and not force:
                 raise ForbiddenError("Cannot delete the last system_admin (use force=True)")
 
         # Проверка зависимостей (без force)
         if not force:
-            groups = await self._repo.get_user_groups(user_id)
-            sessions_count = await self._repo.count_user_sessions(user_id)
+            groups = self._repo.get_user_groups(user_id)
+            sessions_count = self._repo.count_user_sessions(user_id)
             if groups or sessions_count > 0:
                 raise ForbiddenError(
                     "User has dependencies (groups, sessions). Use force=True to cascade."
                 )
 
         # Каскадное удаление
-        await self._repo.revoke_all_user_sessions(user_id)
-        await self._repo.delete_user_roles(user_id)
-        await self._repo.delete_user_group_memberships(user_id)
-        await self._repo.delete_user_password_history(user_id)
-        result = await self._repo.delete_user(user_id)
+        self._repo.revoke_all_user_sessions(user_id)
+        self._repo.delete_user_roles(user_id)
+        self._repo.delete_user_group_memberships(user_id)
+        self._repo.delete_user_password_history(user_id)
+        result = self._repo.delete_user(user_id)
 
         if self._cache:
             self._cache.invalidate(user_id)
@@ -269,7 +269,7 @@ class AuthProvider:
         """Список пользователей с пагинацией."""
         if self._repo is None:
             raise AuthError("Auth not initialized (no Database Provider)")
-        return await self._repo.list_users(offset, limit, search)
+        return self._repo.list_users(offset, limit, search)
 
     # ─────────────────────────────────────────────
     # Состояние пользователей
@@ -282,8 +282,8 @@ class AuthProvider:
             raise AuthError("Auth not initialized (no Database Provider)")
         mins = minutes or self._config.login_block_minutes
         until = datetime.now(timezone.utc) + timedelta(minutes=mins)
-        await self._repo.block_user(user_id, until)
-        await self._repo.revoke_all_user_sessions(user_id)
+        self._repo.block_user(user_id, until)
+        self._repo.revoke_all_user_sessions(user_id)
         if self._cache:
             self._cache.invalidate(user_id)
         log.info("User blocked", extra={"user_id": user_id, "until": until.isoformat()})
@@ -293,7 +293,7 @@ class AuthProvider:
         """Разблокировать пользователя."""
         if self._repo is None:
             raise AuthError("Auth not initialized (no Database Provider)")
-        await self._repo.unblock_user(user_id)
+        self._repo.unblock_user(user_id)
         if self._cache:
             self._cache.invalidate(user_id)
         log.info("User unblocked", extra={"user_id": user_id})
@@ -303,8 +303,8 @@ class AuthProvider:
         """Деактивировать пользователя."""
         if self._repo is None:
             raise AuthError("Auth not initialized (no Database Provider)")
-        await self._repo.disable_user(user_id)
-        await self._repo.revoke_all_user_sessions(user_id)
+        self._repo.disable_user(user_id)
+        self._repo.revoke_all_user_sessions(user_id)
         if self._cache:
             self._cache.invalidate(user_id)
         log.info("User disabled", extra={"user_id": user_id})
@@ -314,7 +314,7 @@ class AuthProvider:
         """Активировать пользователя."""
         if self._repo is None:
             raise AuthError("Auth not initialized (no Database Provider)")
-        await self._repo.enable_user(user_id)
+        self._repo.enable_user(user_id)
         if self._cache:
             self._cache.invalidate(user_id)
         log.info("User enabled", extra={"user_id": user_id})
@@ -336,15 +336,15 @@ class AuthProvider:
         new_hash = hash_password(password)
 
         # Проверка истории
-        is_reused = await self._repo.check_password_history(
+        is_reused = self._repo.check_password_history(
             user_id, new_hash, self._config.password_history_size,
         )
         if is_reused:
             raise ForbiddenError("Password was recently used")
 
-        await self._repo.set_password_hash(user_id, new_hash)
-        await self._repo.save_password_history(user_id, new_hash)
-        await self._repo.prune_password_history(user_id, self._config.password_history_size)
+        self._repo.set_password_hash(user_id, new_hash)
+        self._repo.save_password_history(user_id, new_hash)
+        self._repo.prune_password_history(user_id, self._config.password_history_size)
 
         log.info("Password changed", extra={"user_id": user_id})
 
@@ -373,7 +373,7 @@ class AuthProvider:
         if self._repo is None:
             raise AuthError("Auth not initialized (no Database Provider)")
 
-        user = await self._repo.get_user_by_username(username)
+        user = self._repo.get_user_by_username(username)
         if not user:
             raise InvalidCredentialsError()
 
@@ -389,17 +389,17 @@ class AuthProvider:
             if locked_until > datetime.now(timezone.utc):
                 raise AccountLockedError(locked_until)
             # Блокировка истекла — разблокируем
-            await self._repo.unblock_user(user["id"])
+            self._repo.unblock_user(user["id"])
 
         # Проверка пароля
         ok, new_hash = verify_password(password, user["password_hash"])
         if not ok:
-            attempts = await self._repo.record_login_failure(user["id"])
+            attempts = self._repo.record_login_failure(user["id"])
             if attempts >= self._config.login_attempts_limit:
                 until = datetime.now(timezone.utc) + timedelta(
                     minutes=self._config.login_block_minutes,
                 )
-                await self._repo.block_user(user["id"], until)
+                self._repo.block_user(user["id"], until)
                 log.warning(
                     "Account locked due to too many attempts",
                     extra={"username": username, "attempts": attempts},
@@ -408,18 +408,18 @@ class AuthProvider:
 
         # Lazy rehash
         if new_hash:
-            await self._repo.set_password_hash(user["id"], new_hash)
-            await self._repo.save_password_history(user["id"], new_hash)
-            await self._repo.prune_password_history(
+            self._repo.set_password_hash(user["id"], new_hash)
+            self._repo.save_password_history(user["id"], new_hash)
+            self._repo.prune_password_history(
                 user["id"], self._config.password_history_size,
             )
 
         # Успешный вход — сброс счётчика
-        await self._repo.reset_login_failures(user["id"])
-        await self._repo.set_last_login(user["id"])
+        self._repo.reset_login_failures(user["id"])
+        self._repo.set_last_login(user["id"])
 
         # Версия прав
-        perms_version = await self._repo.get_permissions_version(user["id"])
+        perms_version = self._repo.get_permissions_version(user["id"])
 
         # Создание токенов
         access_token = create_access_token(
@@ -443,7 +443,7 @@ class AuthProvider:
             days=self._config.jwt_refresh_expiration_days,
         )
 
-        await self._repo.create_session(
+        self._repo.create_session(
             user_id=user["id"],
             access_hash=access_hash_val,
             access_expires_at=access_expires,
@@ -489,7 +489,7 @@ class AuthProvider:
             raise AuthError("Auth not initialized (no Database Provider)")
 
         refresh_hash_val = hash_token(refresh_token)
-        session = await self._repo.get_session_by_refresh(refresh_hash_val)
+        session = self._repo.get_session_by_refresh(refresh_hash_val)
 
         if not session:
             raise AuthError("Invalid or expired refresh token")
@@ -500,7 +500,7 @@ class AuthProvider:
             # Refresh token был использован повторно — компрометация
             family_id = session.get("family_id")
             if family_id:
-                await self._repo.revoke_family(family_id)
+                self._repo.revoke_family(family_id)
             log.warning(
                 "Refresh token reuse detected",
                 extra={"session_id": session["id"], "user_id": session["user_id"]},
@@ -515,7 +515,7 @@ class AuthProvider:
             raise AuthError("Refresh token has expired")
 
         # Проверка пользователя
-        user = await self._repo.get_user(session["user_id"])
+        user = self._repo.get_user(session["user_id"])
         if not user or not user.get("is_active") or user.get("is_disabled"):
             raise AuthError("User account is not available")
 
@@ -528,10 +528,10 @@ class AuthProvider:
                 raise AccountLockedError(locked_until)
 
         # Отзываем старую сессию
-        await self._repo.revoke_session(session["id"])
+        self._repo.revoke_session(session["id"])
 
         # Создаём новую сессию с тем же family_id
-        perms_version = await self._repo.get_permissions_version(user["id"])
+        perms_version = self._repo.get_permissions_version(user["id"])
         new_access_token = create_access_token(
             user_id=user["id"],
             username=user["username"],
@@ -551,7 +551,7 @@ class AuthProvider:
             days=self._config.jwt_refresh_expiration_days,
         )
 
-        await self._repo.create_session(
+        self._repo.create_session(
             user_id=user["id"],
             access_hash=new_access_hash,
             access_expires_at=access_expires,
@@ -574,11 +574,11 @@ class AuthProvider:
             raise AuthError("Auth not initialized (no Database Provider)")
 
         refresh_hash_val = hash_token(refresh_token)
-        session = await self._repo.get_session_by_refresh(refresh_hash_val)
+        session = self._repo.get_session_by_refresh(refresh_hash_val)
         if not session:
             return False
 
-        await self._repo.revoke_session(session["id"])
+        self._repo.revoke_session(session["id"])
         log.info("User logged out", extra={"user_id": session["user_id"]})
         return True
 
@@ -611,12 +611,12 @@ class AuthProvider:
 
         # Проверяем сессию в БД
         access_hash_val = hash_token(access_token)
-        session = await self._repo.get_session_by_access(access_hash_val)
+        session = self._repo.get_session_by_access(access_hash_val)
         if not session:
             return None
 
         # Проверяем пользователя
-        user = await self._repo.get_user(user_id)
+        user = self._repo.get_user(user_id)
         if not user or not user.get("is_active") or user.get("is_disabled"):
             return None
 
@@ -628,7 +628,7 @@ class AuthProvider:
                 return None
 
         # Обновляем last_used_at
-        await self._repo.update_session_last_used(session["id"])
+        self._repo.update_session_last_used(session["id"])
 
         return UserContext(
             user_id=user_id,
@@ -646,12 +646,12 @@ class AuthProvider:
             return False
 
         # Проверяем пользователя
-        user = await self._repo.get_user(user_id)
+        user = self._repo.get_user(user_id)
         if not user or not user.get("is_active") or user.get("is_disabled"):
             return False
 
         # Кеш
-        current_version = await self._repo.get_permissions_version(user_id)
+        current_version = self._repo.get_permissions_version(user_id)
         cached = self._cache.get(user_id)
         if cached is not None:
             cached_version, cached_perms = cached
@@ -659,7 +659,7 @@ class AuthProvider:
                 return self._check_permission_set(cached_perms, permission)
 
         # Загружаем из БД
-        perms = await self._repo.get_user_effective_permissions(user_id)
+        perms = self._repo.get_user_effective_permissions(user_id)
         self._cache.set(user_id, current_version, perms)
 
         return self._check_permission_set(perms, permission)
@@ -694,14 +694,14 @@ class AuthProvider:
         """Создать группу."""
         if self._repo is None:
             raise AuthError("Auth not initialized (no Database Provider)")
-        return await self._repo.create_group(name, description)
+        return self._repo.create_group(name, description)
 
 
     async def update_group(self, group_id: str, data: dict[str, Any]) -> dict[str, Any] | None:
         """Обновить группу."""
         if self._repo is None:
             raise AuthError("Auth not initialized (no Database Provider)")
-        return await self._repo.update_group(group_id, data)
+        return self._repo.update_group(group_id, data)
 
 
     async def delete_group(self, group_id: str, force: bool = False) -> bool:
@@ -714,7 +714,7 @@ class AuthProvider:
             raise AuthError("Auth not initialized (no Database Provider)")
 
         if not force:
-            deps = await self._repo.count_group_dependencies(group_id)
+            deps = self._repo.count_group_dependencies(group_id)
             total = sum(deps.values())
             if total > 0:
                 raise ForbiddenError(
@@ -722,10 +722,10 @@ class AuthProvider:
                 )
 
         # Каскадное удаление
-        await self._repo.delete_group_memberships(group_id)
-        await self._repo.delete_group_hierarchy(group_id)
-        await self._repo.delete_group_role_assignments(group_id)
-        return await self._repo.delete_group(group_id)
+        self._repo.delete_group_memberships(group_id)
+        self._repo.delete_group_hierarchy(group_id)
+        self._repo.delete_group_role_assignments(group_id)
+        return self._repo.delete_group(group_id)
 
 
     async def list_groups(
@@ -734,42 +734,42 @@ class AuthProvider:
         """Список групп с пагинацией."""
         if self._repo is None:
             raise AuthError("Auth not initialized (no Database Provider)")
-        return await self._repo.list_groups(offset, limit)
+        return self._repo.list_groups(offset, limit)
 
 
     async def add_user_to_group(self, user_id: str, group_id: str, added_by: str | None = None) -> None:
         """Добавить пользователя в группу."""
         if self._repo is None:
             raise AuthError("Auth not initialized (no Database Provider)")
-        await self._repo.add_user_to_group(user_id, group_id, added_by)
+        self._repo.add_user_to_group(user_id, group_id, added_by)
 
 
     async def remove_user_from_group(self, user_id: str, group_id: str) -> None:
         """Удалить пользователя из группы."""
         if self._repo is None:
             raise AuthError("Auth not initialized (no Database Provider)")
-        await self._repo.remove_user_from_group(user_id, group_id)
+        self._repo.remove_user_from_group(user_id, group_id)
 
 
     async def get_user_groups(self, user_id: str) -> list[dict[str, Any]]:
         """Получить группы пользователя."""
         if self._repo is None:
             raise AuthError("Auth not initialized (no Database Provider)")
-        return await self._repo.get_user_groups(user_id)
+        return self._repo.get_user_groups(user_id)
 
 
     async def add_group_to_group(self, parent_id: str, child_id: str) -> None:
         """Добавить дочернюю группу к родительской."""
         if self._repo is None:
             raise AuthError("Auth not initialized (no Database Provider)")
-        await self._repo.add_group_to_group(parent_id, child_id)
+        self._repo.add_group_to_group(parent_id, child_id)
 
 
     async def remove_group_from_group(self, parent_id: str, child_id: str) -> None:
         """Удалить дочернюю группу."""
         if self._repo is None:
             raise AuthError("Auth not initialized (no Database Provider)")
-        await self._repo.remove_group_from_group(parent_id, child_id)
+        self._repo.remove_group_from_group(parent_id, child_id)
 
     # ─────────────────────────────────────────────
     # Роли
@@ -782,13 +782,13 @@ class AuthProvider:
         """Создать роль."""
         if self._repo is None:
             raise AuthError("Auth not initialized (no Database Provider)")
-        return await self._repo.create_role(name, description, is_builtin)
+        return self._repo.create_role(name, description, is_builtin)
 
     async def update_role(self, role_id: str, data: dict[str, Any]) -> dict[str, Any] | None:
         """Обновить роль."""
         if self._repo is None:
             raise AuthError("Auth not initialized (no Database Provider)")
-        return await self._repo.update_role(role_id, data)
+        return self._repo.update_role(role_id, data)
 
     async def delete_role(self, role_id: str, force: bool = False) -> bool:
         """Удалить роль.
@@ -800,7 +800,7 @@ class AuthProvider:
             raise AuthError("Auth not initialized (no Database Provider)")
 
         if not force:
-            deps = await self._repo.count_role_assignments(role_id)
+            deps = self._repo.count_role_assignments(role_id)
             total = sum(deps.values())
             if total > 0:
                 raise ForbiddenError(
@@ -808,10 +808,10 @@ class AuthProvider:
                 )
 
         # Каскадное удаление
-        await self._repo.delete_role_user_assignments(role_id)
-        await self._repo.delete_role_group_assignments(role_id)
-        await self._repo.delete_role_permissions(role_id)
-        result = await self._repo.delete_role(role_id)
+        self._repo.delete_role_user_assignments(role_id)
+        self._repo.delete_role_group_assignments(role_id)
+        self._repo.delete_role_permissions(role_id)
+        result = self._repo.delete_role(role_id)
         if self._cache:
             self._cache.invalidate_all()
         return result
@@ -822,7 +822,7 @@ class AuthProvider:
         """Список ролей с пагинацией."""
         if self._repo is None:
             raise AuthError("Auth not initialized (no Database Provider)")
-        return await self._repo.list_roles(offset, limit)
+        return self._repo.list_roles(offset, limit)
 
     async def assign_role_to_user(
         self, user_id: str, role_id: str, granted_by: str | None = None,
@@ -830,7 +830,7 @@ class AuthProvider:
         """Назначить роль пользователю."""
         if self._repo is None:
             raise AuthError("Auth not initialized (no Database Provider)")
-        await self._repo.assign_role_to_user(user_id, role_id, granted_by)
+        self._repo.assign_role_to_user(user_id, role_id, granted_by)
         if self._cache:
             self._cache.invalidate(user_id)
 
@@ -838,7 +838,7 @@ class AuthProvider:
         """Убрать роль у пользователя."""
         if self._repo is None:
             raise AuthError("Auth not initialized (no Database Provider)")
-        await self._repo.remove_role_from_user(user_id, role_id)
+        self._repo.remove_role_from_user(user_id, role_id)
         if self._cache:
             self._cache.invalidate(user_id)
 
@@ -846,13 +846,13 @@ class AuthProvider:
         """Получить прямые роли пользователя."""
         if self._repo is None:
             raise AuthError("Auth not initialized (no Database Provider)")
-        return await self._repo.get_user_roles(user_id)
+        return self._repo.get_user_roles(user_id)
 
     async def assign_role_to_group(self, group_id: str, role_id: str) -> None:
         """Назначить роль группе."""
         if self._repo is None:
             raise AuthError("Auth not initialized (no Database Provider)")
-        await self._repo.assign_role_to_group(group_id, role_id)
+        self._repo.assign_role_to_group(group_id, role_id)
         if self._cache:
             self._cache.invalidate_all()
 
@@ -860,7 +860,7 @@ class AuthProvider:
         """Убрать роль у группы."""
         if self._repo is None:
             raise AuthError("Auth not initialized (no Database Provider)")
-        await self._repo.remove_role_from_group(group_id, role_id)
+        self._repo.remove_role_from_group(group_id, role_id)
         if self._cache:
             self._cache.invalidate_all()
 
@@ -868,16 +868,16 @@ class AuthProvider:
         """Получить роли группы."""
         if self._repo is None:
             raise AuthError("Auth not initialized (no Database Provider)")
-        return await self._repo.get_group_roles(group_id)
+        return self._repo.get_group_roles(group_id)
 
     async def inspect_role(self, role_id: str) -> dict[str, Any] | None:
         """Получить роль с её permissions."""
         if self._repo is None:
             raise AuthError("Auth not initialized (no Database Provider)")
-        role = await self._repo.get_role(role_id)
+        role = self._repo.get_role(role_id)
         if not role:
             return None
-        role["permissions"] = await self._repo.get_role_permissions(role_id)
+        role["permissions"] = self._repo.get_role_permissions(role_id)
         return role
 
     # ─────────────────────────────────────────────
@@ -888,13 +888,13 @@ class AuthProvider:
         """Получить все эффективные роли (прямые + через группы)."""
         if self._repo is None:
             raise AuthError("Auth not initialized (no Database Provider)")
-        return await self._repo.get_user_effective_roles(user_id)
+        return self._repo.get_user_effective_roles(user_id)
 
     async def get_user_effective_permissions(self, user_id: str) -> frozenset[str]:
         """Получить все эффективные permissions."""
         if self._repo is None:
             raise AuthError("Auth not initialized (no Database Provider)")
-        return await self._repo.get_user_effective_permissions(user_id)
+        return self._repo.get_user_effective_permissions(user_id)
 
     # ─────────────────────────────────────────────
     # Bootstrap
