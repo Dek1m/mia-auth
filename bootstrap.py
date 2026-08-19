@@ -6,11 +6,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from argenta_logging import get_logger
-
 from .password import hash_password
-
-log = get_logger(__name__)
 
 __all__ = ["AuthBootstrap"]
 
@@ -23,13 +19,15 @@ class AuthBootstrap:
     - Создания первого администратора
     """
 
-    def __init__(self, repository: Any, registry: Any) -> None:
+    def __init__(self, repository: Any, registry: Any, log: Any | None = None) -> None:
         """Args:
             repository: AuthRepository instance.
             registry: AuthSchemaRegistry instance.
+            log: Log facade (optional).
         """
         self._repo = repository
         self._registry = registry
+        self._log = log
 
     async def needs_bootstrap(self) -> bool:
         """Проверить, нужен ли bootstrap.
@@ -90,9 +88,10 @@ class AuthBootstrap:
         if group_row:
             await self._repo.add_user_to_group(user_id, group_row["id"])
 
-        log.info(
-            "Bootstrap completed",
-            extra={"user_id": user_id, "username": username},
-        )
+        if self._log is not None:
+            self._log.info(
+                "Bootstrap completed",
+                extra={"user_id": user_id, "username": username},
+            )
 
         return {"user_id": user_id, "username": username}

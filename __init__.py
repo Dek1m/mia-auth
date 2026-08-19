@@ -28,10 +28,6 @@ __all__ = [
     "AuthConfig",
 ]
 
-from argenta_logging import get_logger
-
-log = get_logger(__name__)
-
 MODULE_VERSION = "2.0.0"
 
 
@@ -75,9 +71,12 @@ class AuthModule(ModuleBase):
     def __init__(self, config: AuthConfig | None = None) -> None:
         self._config = config or AuthConfig.from_env()
         self._provider: AuthProvider | None = None
+        self._log = None
 
     def on_load(self, state: Any) -> None:
         """Инициализация модуля: создаёт провайдер и регистрирует в DI."""
+        self._log = state.log
+
         # Получаем Database Provider из State
         from modules.db.provider import DatabaseProvider
         from modules.auth.schemas import DB_SCHEMA
@@ -88,16 +87,17 @@ class AuthModule(ModuleBase):
         database.register_schema("auth", DB_SCHEMA, schema_name="auth")
 
         # Создание провайдера и регистрация в DI
-        self._provider = AuthProvider(config=self._config, database=database, log=state.log)
+        self._provider = AuthProvider(config=self._config, database=database, log=self._log)
         state.services.register(AuthProvider, self._provider)
 
         # Регистрация AUTH_CORE_SCHEMA (идемпотентно)
         self._provider.initialize_sync()
 
-        log.info("AuthModule loaded (Phase 1: PostgreSQL)")
+        self._log.info("AuthModule loaded (Phase 1: PostgreSQL)")
 
     def on_unload(self) -> None:
         """Очистка ресурсов."""
         if self._provider and self._provider.cache:
             self._provider.cache.invalidate_all()
-        log.info("AuthModule unloaded")
+        self._log.info("AuthModule unloaded")
+        self._log = None

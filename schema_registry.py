@@ -9,10 +9,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from argenta_logging import get_logger
-
-log = get_logger(__name__)
-
 __all__ = ["AuthSchemaRegistry"]
 
 # Роль, доступная только модулю auth
@@ -26,8 +22,9 @@ class AuthSchemaRegistry:
     Все операции идемпотентны.
     """
 
-    def __init__(self, database: Any) -> None:
+    def __init__(self, database: Any, log: Any | None = None) -> None:
         self._database = database
+        self._log = log
 
     def _fetchrow(self, query: str, *params: Any) -> dict[str, Any] | None:
         """Получить одну строку или None."""
@@ -153,10 +150,11 @@ class AuthSchemaRegistry:
             else:
                 result["updated_roles"].append(name)
 
-        log.info(
-            "Auth schema registered",
-            extra={"module_name": module_name, "result": result},
-        )
+        if self._log is not None:
+            self._log.info(
+                "Auth schema registered",
+                extra={"module_name": module_name, "result": result},
+            )
         return result
 
     async def register(
@@ -282,16 +280,17 @@ class AuthSchemaRegistry:
             else:
                 result["updated_roles"].append(name)
 
-        log.info(
-            "Auth schema registered",
-            extra={
-                "module": module_name,
-                "created_perms": len(result["created_permissions"]),
-                "updated_perms": len(result["updated_permissions"]),
-                "created_roles": len(result["created_roles"]),
-                "updated_roles": len(result["updated_roles"]),
-            },
-        )
+        if self._log is not None:
+            self._log.info(
+                "Auth schema registered",
+                extra={
+                    "module": module_name,
+                    "created_perms": len(result["created_permissions"]),
+                    "updated_perms": len(result["updated_permissions"]),
+                    "created_roles": len(result["created_roles"]),
+                    "updated_roles": len(result["updated_roles"]),
+                },
+            )
         return result
 
     # ── Валидация ─────────────────────────────────────────────

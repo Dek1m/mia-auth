@@ -10,18 +10,15 @@ from __future__ import annotations
 
 from typing import Any
 
-from argenta_logging import get_logger
-
-log = get_logger(__name__)
-
 __all__ = ["AuthRepository"]
 
 
 class AuthRepository:
     """Репозиторий для работы с auth-таблицами через Database Provider."""
 
-    def __init__(self, database: Any) -> None:
+    def __init__(self, database: Any, log: Any | None = None) -> None:
         self._database = database
+        self._log = log
 
     async def _fetchrow(self, query: str, *params: Any) -> dict[str, Any] | None:
         """Получить одну строку или None (аналог pool.fetchrow)."""

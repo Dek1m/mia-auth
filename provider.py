@@ -130,10 +130,10 @@ class AuthProvider:
         self._log = log
 
         if database is not None:
-            self._repo = AuthRepository(database)
-            self._registry = AuthSchemaRegistry(database)
+            self._repo = AuthRepository(database, log=log)
+            self._registry = AuthSchemaRegistry(database, log=log)
             self._cache = PermissionsCache(ttl=self._config.perms_cache_ttl)
-            self._bootstrap = AuthBootstrap(self._repo, self._registry)
+            self._bootstrap = AuthBootstrap(self._repo, self._registry, log=log)
 
     @property
     def repository(self) -> AuthRepository | None:
