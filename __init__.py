@@ -21,11 +21,13 @@ from typing import Any
 from modules_system.module_base import ModuleBase, ModuleMeta
 from .provider import AuthProvider
 from .config import AuthConfig
+from .user import User
 
 __all__ = [
     "AuthModule",
     "AuthProvider",
     "AuthConfig",
+    "User",
 ]
 
 MODULE_VERSION = "2.0.0"
