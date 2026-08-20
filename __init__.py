@@ -79,23 +79,26 @@ class AuthModule(ModuleBase):
         """Инициализация модуля: создаёт провайдер и регистрирует в DI."""
         self._log = state.log
 
-        # Получаем Database Provider из State
+        from modules.db.provider import DatabaseProvider
+
+        database = state.services.resolve(DatabaseProvider)
+
+        self._provider = AuthProvider(config=self._config, database=database, log=self._log)
+        state.services.register(AuthProvider, self._provider)
+
+        self._log.info("AuthModule loaded (Phase 1: PostgreSQL)")
+
+    def apply_schema(self, state: Any) -> None:
+        """DDL + seed permissions. Только migrate, не worker fork."""
         from modules.db.provider import DatabaseProvider
         from modules.auth.schemas import DB_SCHEMA
 
         database = state.services.resolve(DatabaseProvider)
-
-        # Создание таблиц auth (идемпотентно)
         database.register_schema("auth", DB_SCHEMA, schema_name="auth")
-
-        # Создание провайдера и регистрация в DI
-        self._provider = AuthProvider(config=self._config, database=database, log=self._log)
-        state.services.register(AuthProvider, self._provider)
-
-        # Регистрация AUTH_CORE_SCHEMA (идемпотентно)
-        self._provider.initialize_sync()
-
-        self._log.info("AuthModule loaded (Phase 1: PostgreSQL)")
+        if self._provider is not None:
+            self._provider.initialize_sync()
+        if self._log is not None:
+            self._log.info("auth_schema_applied")
 
     def on_unload(self) -> None:
         """Очистка ресурсов."""
