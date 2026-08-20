@@ -136,6 +136,11 @@ class AuthProvider:
             self._cache = PermissionsCache(ttl=self._config.perms_cache_ttl)
             self._bootstrap = AuthBootstrap(self._repo, self._registry, log=log)
 
+    def _warn(self, message: str, **extra: Any) -> None:
+        if self._log is None:
+            return
+        self._log.warning(message, extra=extra)
+
     @property
     def repository(self) -> AuthRepository | None:
         return self._repo
@@ -397,10 +402,12 @@ class AuthProvider:
 
         user = await self._repo.get_user_by_username(username)
         if not user:
+            self._warn("login_failed", username=username, reason="unknown_user")
             raise InvalidCredentialsError()
 
         # Проверка деактивации
         if user.get("is_disabled"):
+            self._warn("login_failed", username=username, reason="disabled")
             raise AccountDisabledError()
 
         # Проверка блокировки
@@ -409,6 +416,7 @@ class AuthProvider:
             if isinstance(locked_until, str):
                 locked_until = datetime.fromisoformat(locked_until)
             if locked_until > datetime.now(timezone.utc):
+                self._warn("login_failed", username=username, reason="locked")
                 raise AccountLockedError(locked_until)
             # Блокировка истекла — разблокируем
             await self._repo.unblock_user(user["id"])
@@ -422,9 +430,12 @@ class AuthProvider:
                     minutes=self._config.login_block_minutes,
                 )
                 await self._repo.block_user(user["id"], until)
-                self._log.warning(
-                    "Account locked due to too many attempts",
-                    extra={"username": username, "attempts": attempts},
+                self._warn(
+                    "login_failed", username=username, reason="locked", attempts=attempts,
+                )
+            else:
+                self._warn(
+                    "login_failed", username=username, reason="bad_password", attempts=attempts,
                 )
             raise InvalidCredentialsError()
 
