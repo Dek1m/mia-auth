@@ -150,12 +150,26 @@ class AuthSchemaRegistry:
             else:
                 result["updated_roles"].append(name)
 
+        # Builtin-группа Administrators — всегда до первого bootstrap (ADR-001 §7.1)
+        if module_name == "auth":
+            self._seed_administrators_group()
+
         if self._log is not None:
             self._log.info(
                 "Auth schema registered",
                 extra={"module_name": module_name, "result": result},
             )
         return result
+
+    def _seed_administrators_group(self) -> None:
+        """Идемпотентный сид группы Administrators (is_builtin=true)."""
+        self._database.execute(
+            "INSERT INTO auth.groups (name, description, is_builtin) "
+            "VALUES (%s, %s, TRUE) "
+            "ON CONFLICT (name) DO UPDATE SET is_builtin = TRUE",
+            "Administrators",
+            "Встроенная группа системных администраторов",
+        )
 
     async def register(
         self,

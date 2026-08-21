@@ -11,6 +11,7 @@ from modules.auth.provider import (
     ReuseDetectedError,
     NotFoundError,
     ForbiddenError,
+    BootstrapDoneError,
 )
 from modules.auth.password import hash_password
 
@@ -179,6 +180,24 @@ class TestProviderRefresh:
         with pytest.raises(Exception):
             await provider.refresh_token(refresh_result["refresh_token"])
 
+    async def test_refresh_grace_returns_same_pair(self, mock_pool, mock_logger):
+        from modules.auth.config import AuthConfig
+
+        config = AuthConfig(
+            jwt_secret="test-secret-key-for-testing-12345",
+            refresh_grace_seconds=8,
+            password_min_length=8,
+            password_require_uppercase=True,
+            password_require_digit=True,
+        )
+        graceful = AuthProvider(config=config, database=mock_pool, log=mock_logger)
+        await graceful.create_user("admin", "SecurePass123")
+        login_result = await graceful.login("admin", "SecurePass123")
+        first = await graceful.refresh_token(login_result["refresh_token"])
+        second = await graceful.refresh_token(login_result["refresh_token"])
+        assert first["refresh_token"] == second["refresh_token"]
+        assert first["access_token"] == second["access_token"]
+
 
 @pytest.mark.asyncio
 class TestProviderLogout:
@@ -288,7 +307,7 @@ class TestProviderBootstrap:
     async def test_bootstrap_second_time_raises(self, provider: AuthProvider, mock_pool):
         await provider.initialize()
         await provider.bootstrap("admin", "SecurePass123")
-        with pytest.raises(ValueError, match="already completed"):
+        with pytest.raises(BootstrapDoneError):
             await provider.bootstrap("admin2", "SecurePass123")
 
 
@@ -317,3 +336,85 @@ class TestProviderPasswordValidation:
         # Different password → different hash → not in history
         new_hash = hash_password("DifferentPassword456")
         assert await provider._repo.check_password_history(user["id"], new_hash) is False
+
+
+@pytest.mark.asyncio
+class TestProviderProfile:
+    async def test_get_me_without_password_hash(self, provider: AuthProvider):
+        user = await provider.create_user("admin", "SecurePass123", email="a@b.co")
+        profile = await provider.get_me(user_id=user["id"])
+        assert "password_hash" not in profile
+        assert profile["user_id"] == user["id"]
+        assert profile["username"] == "admin"
+        assert profile["email"] == "a@b.co"
+        assert profile["chip_display_mode"] == "nickname"
+        assert profile["is_bootstrap_admin"] is False
+        assert profile["avatar_url"] is None
+
+    async def test_chip_display_mode_mutex(self, provider: AuthProvider):
+        user = await provider.create_user("admin", "SecurePass123")
+        nick = await provider.update_me(
+            nickname="Neo", chip_display_mode="nickname", user_id=user["id"],
+        )
+        assert nick["chip_display_mode"] == "nickname"
+        full = await provider.update_me(
+            first_name="A", last_name="B", chip_display_mode="full_name",
+            user_id=user["id"],
+        )
+        assert full["chip_display_mode"] == "full_name"
+        assert full["nickname"] == "Neo"
+
+    async def test_chip_display_mode_rejects_both(self, provider: AuthProvider):
+        user = await provider.create_user("admin", "SecurePass123")
+        with pytest.raises(ValueError, match="chip_display_mode"):
+            await provider.update_me(chip_display_mode="both", user_id=user["id"])
+
+
+@pytest.mark.asyncio
+class TestProviderMembershipInvariants:
+    async def test_remove_primary_forbidden(self, provider: AuthProvider):
+        user = await provider.create_user("admin", "SecurePass123")
+        group = await provider.create_group("Users")
+        await provider._repo.add_user_to_group(user["id"], group["id"], is_primary=True)
+        with pytest.raises(ForbiddenError, match="primary"):
+            await provider.remove_user_from_group(user["id"], group["id"])
+
+    async def test_remove_administrators_from_bootstrap_forbidden(
+        self, provider: AuthProvider, mock_pool,
+    ):
+        user = await provider.create_user("root", "SecurePass123")
+        mock_pool._data["auth.users"][user["id"]]["is_bootstrap_admin"] = True
+        group = await provider.create_group("Administrators")
+        mock_pool._data["auth.groups"][group["id"]]["is_builtin"] = True
+        await provider._repo.add_user_to_group(user["id"], group["id"], is_primary=False)
+        with pytest.raises(ForbiddenError, match="Administrators"):
+            await provider.remove_user_from_group(user["id"], group["id"])
+
+    async def test_delete_builtin_group_forbidden(self, provider: AuthProvider, mock_pool):
+        group = await provider.create_group("Administrators")
+        mock_pool._data["auth.groups"][group["id"]]["is_builtin"] = True
+        with pytest.raises(ForbiddenError, match="builtin"):
+            await provider.delete_group(group["id"], force=True)
+
+
+@pytest.mark.asyncio
+class TestProviderAvatar:
+    async def test_svg_avatar_forbidden(self, provider: AuthProvider):
+        import base64
+
+        user = await provider.create_user("admin", "SecurePass123")
+        payload = base64.b64encode(b"<svg xmlns='http://www.w3.org/2000/svg'></svg>").decode()
+        with pytest.raises(ForbiddenError, match="SVG"):
+            await provider.set_avatar(payload, "image/svg+xml", user_id=user["id"])
+
+    async def test_png_avatar_ok(self, provider: AuthProvider):
+        import base64
+
+        user = await provider.create_user("admin", "SecurePass123")
+        raw = b"\x89PNG\r\n\x1a\n" + b"\x00" * 8
+        payload = base64.b64encode(raw).decode()
+        result = await provider.set_avatar(payload, "image/png", user_id=user["id"])
+        assert result["avatar_url"] == "/api/v1/auth/avatar"
+        me = await provider.get_me(user_id=user["id"])
+        assert me["avatar_url"] == "/api/v1/auth/avatar"
+        assert "password_hash" not in me

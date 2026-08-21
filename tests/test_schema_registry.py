@@ -26,7 +26,7 @@ class RegistryMockPool:
         self._role_permissions: dict[str, list[str]] = {}  # role_name → [perm_names]
         self._seq = 0
 
-    async def fetchrow(self, query: str, *args):
+    def fetchrow(self, query: str, *args):
         if "SELECT source_module FROM auth.permissions" in query:
             name = args[0]
             p = self._permissions.get(name)
@@ -53,7 +53,7 @@ class RegistryMockPool:
             return None
         return None
 
-    async def execute(self, query: str, *args) -> str:
+    def execute(self, query: str, *args) -> str:
         if "INSERT INTO auth.permissions" in query and "ON CONFLICT" in query:
             name = args[0]
             description = args[1]
@@ -110,7 +110,7 @@ class RegistryMockPool:
                     self._role_permissions[role_name].append(perm_name)
         return "OK"
 
-    async def fetch(self, query: str, *args) -> list[dict]:
+    def fetch(self, query: str, *args) -> list[dict]:
         """Аналог DatabaseProvider.fetch — возвращает список строк."""
         if "SELECT source_module FROM auth.permissions" in query:
             name = args[0]
@@ -157,9 +157,10 @@ async def test_bug_auth_core_schema_cannot_be_registered(
     Namespace-проверка пропускается для module_name == "auth".
     """
     result = await registry.register("auth", AUTH_CORE_SCHEMA, is_builtin=True)
-    assert len(result["created_permissions"]) == 21
+    assert len(result["created_permissions"]) == 22
     assert len(result["created_roles"]) == 4
     assert "users:create" in result["created_permissions"]
+    assert "profile:self" in result["created_permissions"]
     assert "system_admin" in result["created_roles"]
 
 
@@ -706,6 +707,16 @@ async def test_invalid_permission_format_in_role(
 def test_reserved_roles_contains_system_admin():
     """_RESERVED_ROLES содержит system_admin."""
     assert "system_admin" in _RESERVED_ROLES
+
+
+def test_auth_core_schema_has_profile_self():
+    """ADR-001: permission profile:self есть в AUTH_CORE_SCHEMA."""
+    names = {p["name"] for p in AUTH_CORE_SCHEMA["permissions"]}
+    assert "profile:self" in names
+    for role in AUTH_CORE_SCHEMA["roles"]:
+        if role["name"] == "system_admin":
+            continue
+        assert "profile:self" in role["permissions"]
 
 
 # ── BUG: source_module overwrite без проверки ────────────

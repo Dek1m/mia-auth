@@ -34,7 +34,7 @@ DO $$ BEGIN
         $fn$ LANGUAGE plpgsql;
 
         CREATE TRIGGER check_group_cycle
-            BEFORE INSERT OR UPDATE ON auth.auth.group_group_membership
+            BEFORE INSERT OR UPDATE ON auth.group_group_membership
             FOR EACH ROW
             EXECUTE FUNCTION check_group_cycle_fn();
     END IF;

@@ -89,12 +89,20 @@ class AuthModule(ModuleBase):
         self._log.info("AuthModule loaded (Phase 1: PostgreSQL)")
 
     def apply_schema(self, state: Any) -> None:
-        """DDL + seed permissions. Только migrate, не worker fork."""
+        """DDL + seed permissions/групп. Только migrate, не worker fork."""
+        from copy import deepcopy
+
         from modules.db.provider import DatabaseProvider
         from modules.auth.schemas import DB_SCHEMA
 
         database = state.services.resolve(DatabaseProvider)
-        database.register_schema("auth", DB_SCHEMA, schema_name="auth")
+        # deepcopy: register_schema.pop("schema") мутирует исходный dict
+        database.register_schema(
+            "auth",
+            deepcopy(DB_SCHEMA),
+            schema_name="auth",
+            ddl_dir="ddl",
+        )
         if self._provider is not None:
             self._provider.initialize_sync()
         if self._log is not None:

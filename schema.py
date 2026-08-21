@@ -35,6 +35,8 @@ AUTH_CORE_SCHEMA: dict[str, list[dict[str, Any]]] = {
         {"name": "roles:list", "description": "Получение списка ролей"},
         {"name": "roles:manage", "description": "Назначение ролей пользователям и группам"},
         {"name": "roles:inspect", "description": "Просмотр разрешений роли"},
+        # === profile (свой профиль; не users:read — иначе дыра на чужие записи) ===
+        {"name": "profile:self", "description": "Чтение и изменение собственного профиля"},
         # === system ===
         {"name": "system:force_delete", "description": "Принудительное удаление любых данных (только для system_admin)"},
     ],
@@ -47,17 +49,17 @@ AUTH_CORE_SCHEMA: dict[str, list[dict[str, Any]]] = {
         {
             "name": "user_manager",
             "description": "Менеджер пользователей — управление пользователями и их состоянием",
-            "permissions": ["users:*", "user_state:*", "passwords:manage"],
+            "permissions": ["users:*", "user_state:*", "passwords:manage", "profile:self"],
         },
         {
             "name": "group_manager",
             "description": "Менеджер групп — управление группами и их составом",
-            "permissions": ["groups:*", "groups:manage_membership"],
+            "permissions": ["groups:*", "groups:manage_membership", "profile:self"],
         },
         {
             "name": "role_manager",
             "description": "Менеджер ролей — управление ролями и назначение разрешений",
-            "permissions": ["roles:*"],
+            "permissions": ["roles:*", "profile:self"],
         },
     ],
 }

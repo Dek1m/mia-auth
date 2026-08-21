@@ -78,15 +78,23 @@ class AuthBootstrap:
         )
         user_id = user["id"]
 
+        # Superadmin = пользователь bootstrap, не любой system_admin (ADR-001 §7.2)
+        self._repo._database.execute(
+            "UPDATE auth.users SET is_bootstrap_admin = TRUE WHERE id = %s",
+            user_id,
+        )
+
         # Находим role_id для system_admin
         role_row = await self._repo.find_role_by_name("system_admin")
         if role_row:
             await self._repo.assign_role_to_user(user_id, role_row["id"])
 
-        # Находим группу Administrators (если существует)
+        # Группа Administrators сидится при apply_schema; membership — primary
         group_row = await self._repo.find_group_by_name("Administrators")
         if group_row:
-            await self._repo.add_user_to_group(user_id, group_row["id"])
+            await self._repo.add_user_to_group(
+                user_id, group_row["id"], is_primary=True,
+            )
 
         if self._log is not None:
             self._log.info(

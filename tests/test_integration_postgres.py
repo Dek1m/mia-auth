@@ -67,8 +67,12 @@ def _setup_schema(pool: psycopg_pool.ConnectionPool) -> None:
     
     log = Log(level="WARNING", format="posix")
     db_config = DatabaseConfig()
+    from copy import deepcopy
+
     db_provider = DatabaseProvider(pool=pool, config=db_config, log=log)
-    db_provider.register_schema("auth", DB_SCHEMA, schema_name="auth")
+    db_provider.register_schema(
+        "auth", deepcopy(DB_SCHEMA), schema_name="auth", ddl_dir="ddl",
+    )
 
 
 def _cleanup_schema(pool: psycopg_pool.ConnectionPool) -> None:

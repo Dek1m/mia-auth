@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -32,7 +32,15 @@ from .permissions_cache import PermissionsCache
 from .schema_registry import AuthSchemaRegistry
 from .schema import AUTH_CORE_SCHEMA
 from .bootstrap import AuthBootstrap
+from .validators import (
+    ForbiddenAvatarError,
+    decode_avatar,
+    validate_profile_patch,
+)
 from core.task_decorator import task
+
+AVATAR_URL = "/api/v1/auth/avatar"
+_ADMINISTRATORS = "Administrators"
 
 
 __all__ = ["AuthProvider", "UserContext"]
@@ -109,6 +117,20 @@ class ForbiddenError(AuthError):
         super().__init__(message, "FORBIDDEN")
 
 
+class BootstrapDoneError(AuthError):
+    def __init__(self) -> None:
+        super().__init__("Bootstrap already completed", "BOOTSTRAP_DONE")
+
+
+@dataclass
+class _RefreshGrace:
+    access_token: str
+    refresh_token: str
+    user_id: str
+    username: str
+    expires_at: datetime
+
+
 # ── Провайдер ───────────────────────────────────────────
 
 class AuthProvider:
@@ -139,6 +161,8 @@ class AuthProvider:
         self._cache: PermissionsCache | None = None
         self._bootstrap: AuthBootstrap | None = None
         self._log = log
+        self._refresh_grace: dict[str, _RefreshGrace] = {}
+        self._refresh_lock = asyncio.Lock()
 
         if database is not None:
             self._repo = AuthRepository(database, log=log)
@@ -309,6 +333,194 @@ class AuthProvider:
         if self._repo is None:
             raise AuthError("Auth not initialized (no Database Provider)")
         return await self._repo.list_users(offset, limit, search)
+
+    # ─────────────────────────────────────────────
+    # Профиль (self) — ADR-001 §5.2–§5.5
+    # ─────────────────────────────────────────────
+
+    @task(
+        type="database",
+        api=True,
+        name="get_me",
+        description="Свой профиль. Любой валидный access, не users:read",
+        args={},
+        return_type="dict",
+    )
+    async def get_me(
+        self,
+        user_id: str | None = None,
+        _session_user_id: str | None = None,
+    ) -> dict[str, Any]:
+        uid = self._self_id(_session_user_id, user_id, ignore_client=True)
+        return await self._profile_dto(uid)
+
+    @task(
+        type="database",
+        api=True,
+        name="update_me",
+        description="Обновить свой профиль",
+        args={
+            "nickname": "str",
+            "first_name": "str",
+            "last_name": "str",
+            "email": "str",
+            "phone": "str",
+            "user_prompt": "str",
+            "chip_display_mode": "str",
+        },
+        return_type="dict",
+    )
+    async def update_me(
+        self,
+        nickname: str | None = None,
+        first_name: str | None = None,
+        last_name: str | None = None,
+        email: str | None = None,
+        phone: str | None = None,
+        user_prompt: str | None = None,
+        chip_display_mode: str | None = None,
+        user_id: str | None = None,
+        _session_user_id: str | None = None,
+    ) -> dict[str, Any]:
+        uid = self._self_id(_session_user_id, user_id, ignore_client=True)
+        raw: dict[str, Any] = {}
+        for key, value in (
+            ("nickname", nickname),
+            ("first_name", first_name),
+            ("last_name", last_name),
+            ("email", email),
+            ("phone", phone),
+            ("user_prompt", user_prompt),
+            ("chip_display_mode", chip_display_mode),
+        ):
+            if value is not None:
+                raw[key] = value
+        patch = validate_profile_patch(raw)
+        if "email" in patch and patch["email"]:
+            existing = await self._need_repo().get_user_by_email(str(patch["email"]))
+            if existing and str(existing["id"]) != str(uid):
+                raise ValueError("Email already in use")
+        updated = await self._need_repo().update_profile(uid, patch)
+        if updated is None:
+            raise NotFoundError("User")
+        return await self._profile_dto(uid)
+
+    @task(
+        type="database",
+        api=True,
+        name="change_username",
+        description="Смена username с текущим паролем",
+        args={"new_username": "str", "password": "str"},
+        return_type="dict",
+    )
+    async def change_username(
+        self,
+        new_username: str,
+        password: str,
+        user_id: str | None = None,
+        _session_user_id: str | None = None,
+    ) -> dict[str, Any]:
+        uid = self._self_id(_session_user_id, user_id, ignore_client=True)
+        username = (new_username or "").strip()
+        if not username or len(username) > 255:
+            raise ValueError("Invalid username")
+        user = await self._need_repo().get_user(uid)
+        if not user:
+            raise NotFoundError("User")
+        ok, _ = verify_password(password, user["password_hash"])
+        if not ok:
+            raise InvalidCredentialsError()
+        other = await self._need_repo().get_user_by_username(username)
+        if other and str(other["id"]) != str(uid):
+            raise ValueError(f"User '{username}' already exists")
+        await self._need_repo().set_username(uid, username)
+        return await self._profile_dto(uid)
+
+    @task(
+        type="cpu",
+        api=True,
+        name="set_avatar",
+        description="Загрузить аватар (jpeg/png/webp, не SVG, ≤256 KiB)",
+        args={"image_b64": "str", "content_type": "str"},
+        return_type="dict",
+    )
+    async def set_avatar(
+        self,
+        image_b64: str,
+        content_type: str,
+        user_id: str | None = None,
+        _session_user_id: str | None = None,
+    ) -> dict[str, str]:
+        uid = self._self_id(_session_user_id, user_id, ignore_client=True)
+        try:
+            raw = decode_avatar(image_b64, content_type)
+        except ForbiddenAvatarError as exc:
+            raise ForbiddenError(str(exc)) from exc
+        mime = content_type.split(";")[0].strip().lower()
+        await self._need_repo().upsert_avatar(uid, raw, mime)
+        return {"avatar_url": AVATAR_URL}
+
+    @task(
+        type="database",
+        api=True,
+        name="clear_avatar",
+        description="Удалить аватар",
+        args={},
+        return_type="dict",
+    )
+    async def clear_avatar(
+        self,
+        user_id: str | None = None,
+        _session_user_id: str | None = None,
+    ) -> dict[str, Any]:
+        uid = self._self_id(_session_user_id, user_id, ignore_client=True)
+        await self._need_repo().delete_avatar(uid)
+        return await self._profile_dto(uid)
+
+    @task(
+        type="database",
+        api=True,
+        name="get_my_groups",
+        description="Группы текущего пользователя",
+        args={},
+        return_type="list",
+    )
+    async def get_my_groups(
+        self,
+        user_id: str | None = None,
+        _session_user_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        uid = self._self_id(_session_user_id, user_id, ignore_client=True)
+        groups = await self._need_repo().get_user_groups(uid)
+        return [self._group_dto(item, is_primary=bool(item.get("is_primary"))) for item in groups]
+
+    @task(
+        type="database",
+        api=True,
+        name="list_groups",
+        description="Список групп для Add (без чужих membership)",
+        args={"offset": "int", "limit": "int"},
+        return_type="dict",
+    )
+    async def list_groups_rpc(
+        self,
+        offset: int = 0,
+        limit: int = 100,
+        _session_user_id: str | None = None,
+    ) -> dict[str, Any]:
+        # _session_user_id: метод не public — нужен валидный access
+        items, total = await self.list_groups(offset, limit)
+        return {
+            "items": [self._group_dto(item, is_primary=False) for item in items],
+            "total": total,
+        }
+
+    async def get_avatar_bytes(self, user_id: str) -> tuple[bytes, str] | None:
+        """Для GET /api/v1/auth/avatar. Не RPC."""
+        row = await self._need_repo().get_avatar(user_id)
+        if not row or row.get("bytes") is None:
+            return None
+        return bytes(row["bytes"]), str(row.get("content_type") or "application/octet-stream")
 
     # ─────────────────────────────────────────────
     # Состояние пользователей
@@ -533,101 +745,29 @@ class AuthProvider:
     )
     async def refresh_token(
         self,
-        refresh_token: str,
+        refresh_token: str | None = None,
         user_agent: str | None = None,
         ip: str | None = None,
     ) -> dict[str, str]:
         """Обновить access token через refresh token.
 
-        Обнаружение reuse: если last_used_at уже установлен —
-        семья токенов скомпрометирована, все сессии отзываются.
+        Пустой kwargs допустим: REST подставляет refresh из cookie.
+        Grace 5–10 с: повтор того же hash → та же новая пара, не revoke.
 
         Returns:
-            {"access_token": str, "refresh_token": str}
+            {"access_token", "refresh_token", "user_id", "username"}
 
         Raises:
-            ReuseDetectedError: Обнаружено повторное использование refresh token.
+            ReuseDetectedError: Повтор hash после grace-окна.
             AuthError: Сессия не найдена или истекла.
         """
         if self._repo is None:
             raise AuthError("Auth not initialized (no Database Provider)")
-
-        refresh_hash_val = hash_token(refresh_token)
-        session = await self._repo.get_session_by_refresh(refresh_hash_val)
-
-        if not session:
+        if not refresh_token:
             raise AuthError("Invalid or expired refresh token")
 
-        # Reuse detection
-        last_used = session.get("last_used_at")
-        if last_used is not None:
-            # Refresh token был использован повторно — компрометация
-            family_id = session.get("family_id")
-            if family_id:
-                await self._repo.revoke_family(family_id)
-            self._warn(
-                "Refresh token reuse detected",
-                session_id=str(session["id"]),
-                user_id=str(session["user_id"]),
-            )
-            raise ReuseDetectedError()
-
-        # Проверка срока действия
-        refresh_expires = _as_utc(session.get("refresh_expires_at"))
-        if refresh_expires and refresh_expires < datetime.now(timezone.utc):
-            raise AuthError("Refresh token has expired")
-
-        # Проверка пользователя
-        user = await self._repo.get_user(session["user_id"])
-        if not user or not user.get("is_active") or user.get("is_disabled"):
-            raise AuthError("User account is not available")
-
-        locked_until = _as_utc(user.get("locked_until"))
-        if locked_until and locked_until > datetime.now(timezone.utc):
-            raise AccountLockedError(locked_until)
-
-        # Помечаем старую сессию как использованную (НЕ отзываем —
-        # иначе reuse detection не сработает: get_session_by_refresh
-        # фильтрует is_revoked=FALSE и не найдёт повторно использованный токен).
-        # Если токен будет использован повторно — last_used_at != None → reuse detected.
-        await self._repo.update_session_last_used(session["id"])
-
-        # Создаём новую сессию с тем же family_id
-        perms_version = await self._repo.get_permissions_version(user["id"])
-        new_access_token = create_access_token(
-            user_id=user["id"],
-            username=user["username"],
-            perms_version=perms_version,
-            secret=self._config.jwt_secret,
-            algorithm=self._config.jwt_algorithm,
-            expires_in_minutes=self._config.jwt_access_expiration_minutes,
-        )
-        new_refresh_token = create_refresh_token()
-
-        new_access_hash = hash_token(new_access_token)
-        new_refresh_hash = hash_token(new_refresh_token)
-        access_expires = datetime.now(timezone.utc) + timedelta(
-            minutes=self._config.jwt_access_expiration_minutes,
-        )
-        refresh_expires_at = datetime.now(timezone.utc) + timedelta(
-            days=self._config.jwt_refresh_expiration_days,
-        )
-
-        await self._repo.create_session(
-            user_id=user["id"],
-            access_hash=new_access_hash,
-            access_expires_at=access_expires,
-            refresh_hash=new_refresh_hash,
-            refresh_expires_at=refresh_expires_at,
-            user_agent=user_agent,
-            ip_address=ip,
-            family_id=session.get("family_id"),
-        )
-
-        return {
-            "access_token": new_access_token,
-            "refresh_token": new_refresh_token,
-        }
+        async with self._refresh_lock:
+            return await self._rotate_refresh(refresh_token, user_agent, ip)
 
 
     @task(
@@ -638,10 +778,12 @@ class AuthProvider:
         args={"refresh_token": "str"},
         return_type="bool",
     )
-    async def logout(self, refresh_token: str) -> bool:
+    async def logout(self, refresh_token: str | None = None) -> bool:
         """Выход пользователя — отзыв сессии по refresh token."""
         if self._repo is None:
             raise AuthError("Auth not initialized (no Database Provider)")
+        if not refresh_token:
+            return False
 
         refresh_hash_val = hash_token(refresh_token)
         session = await self._repo.get_session_by_refresh(refresh_hash_val)
@@ -779,9 +921,14 @@ class AuthProvider:
 
         Без force: ошибка если есть зависимости.
         С force: каскадное удаление.
+        Builtin (Administrators) — всегда Forbidden.
         """
         if self._repo is None:
             raise AuthError("Auth not initialized (no Database Provider)")
+
+        group = await self._repo.get_group(group_id)
+        if group and group.get("is_builtin"):
+            raise ForbiddenError("Cannot delete builtin group")
 
         if not force:
             deps = await self._repo.count_group_dependencies(group_id)
@@ -808,20 +955,66 @@ class AuthProvider:
         return await self._repo.list_groups(offset, limit)
 
 
-    @task(type="database")
-    async def add_user_to_group(self, user_id: str, group_id: str, added_by: str | None = None) -> None:
+    @task(
+        type="database",
+        api=True,
+        name="add_user_to_group",
+        description="Добавить в группу. Чужой user_id — только groups:manage_membership",
+        args={"user_id": "str", "group_id": "str"},
+        return_type="bool",
+    )
+    async def add_user_to_group(
+        self,
+        user_id: str | None = None,
+        group_id: str | None = None,
+        added_by: str | None = None,
+        _session_user_id: str | None = None,
+    ) -> bool:
         """Добавить пользователя в группу."""
         if self._repo is None:
             raise AuthError("Auth not initialized (no Database Provider)")
-        await self._repo.add_user_to_group(user_id, group_id, added_by)
+        if not group_id:
+            raise ValueError("group_id is required")
+        target = await self._membership_target(user_id, _session_user_id)
+        await self._repo.add_user_to_group(target, group_id, added_by or _session_user_id)
+        return True
 
-
-    @task(type="database")
-    async def remove_user_from_group(self, user_id: str, group_id: str) -> None:
-        """Удалить пользователя из группы."""
+    @task(
+        type="database",
+        api=True,
+        name="remove_user_from_group",
+        description="Убрать из группы. Primary и bootstrap Administrators — Forbidden",
+        args={"user_id": "str", "group_id": "str"},
+        return_type="bool",
+    )
+    async def remove_user_from_group(
+        self,
+        user_id: str | None = None,
+        group_id: str | None = None,
+        _session_user_id: str | None = None,
+    ) -> bool:
+        """Удалить пользователя из группы. Сервер — истина AD-инвариантов."""
         if self._repo is None:
             raise AuthError("Auth not initialized (no Database Provider)")
-        await self._repo.remove_user_from_group(user_id, group_id)
+        if not group_id:
+            raise ValueError("group_id is required")
+        target = await self._membership_target(user_id, _session_user_id)
+        membership = await self._repo.get_membership(target, group_id)
+        if membership is None:
+            raise NotFoundError("Membership")
+        if membership.get("is_primary"):
+            raise ForbiddenError("Cannot remove primary group")
+        group = await self._repo.get_group(group_id)
+        user = await self._repo.get_user(target)
+        if (
+            group
+            and group.get("name") == _ADMINISTRATORS
+            and user
+            and user.get("is_bootstrap_admin")
+        ):
+            raise ForbiddenError("Cannot remove Administrators from bootstrap admin")
+        await self._repo.remove_user_from_group(target, group_id)
+        return True
 
 
     @task(type="database")
@@ -1019,11 +1212,178 @@ class AuthProvider:
         """Создать первого системного администратора."""
         if self._bootstrap is None:
             raise AuthError("Auth not initialized (no Database Provider)")
-        return await self._bootstrap.bootstrap(username, password, email)
+        try:
+            return await self._bootstrap.bootstrap(username, password, email)
+        except ValueError as exc:
+            if "already completed" in str(exc).lower():
+                raise BootstrapDoneError() from exc
+            raise
 
     # ─────────────────────────────────────────────
     # Приватные методы
     # ─────────────────────────────────────────────
+
+    async def _rotate_refresh(
+        self,
+        refresh_token: str,
+        user_agent: str | None,
+        ip: str | None,
+    ) -> dict[str, str]:
+        assert self._repo is not None
+        now = datetime.now(timezone.utc)
+        grace = max(0, int(self._config.refresh_grace_seconds))
+        refresh_hash_val = hash_token(refresh_token)
+        cached = self._refresh_grace.get(refresh_hash_val)
+        if cached is not None and cached.expires_at >= now:
+            return {
+                "access_token": cached.access_token,
+                "refresh_token": cached.refresh_token,
+                "user_id": cached.user_id,
+                "username": cached.username,
+            }
+
+        session = await self._repo.get_session_by_refresh(refresh_hash_val)
+        if not session:
+            raise AuthError("Invalid or expired refresh token")
+
+        last_used = _as_utc(session.get("last_used_at"))
+        if last_used is not None:
+            elapsed = (now - last_used).total_seconds()
+            if grace > 0 and elapsed < grace:
+                # Окно есть, пары в кеше нет — не режем family
+                raise AuthError("Invalid or expired refresh token")
+            family_id = session.get("family_id")
+            if family_id:
+                await self._repo.revoke_family(family_id)
+            self._warn(
+                "Refresh token reuse detected",
+                session_id=str(session["id"]),
+                user_id=str(session["user_id"]),
+            )
+            raise ReuseDetectedError()
+
+        refresh_expires = _as_utc(session.get("refresh_expires_at"))
+        if refresh_expires and refresh_expires < now:
+            raise AuthError("Refresh token has expired")
+
+        user = await self._repo.get_user(session["user_id"])
+        if not user or not user.get("is_active") or user.get("is_disabled"):
+            raise AuthError("User account is not available")
+
+        locked_until = _as_utc(user.get("locked_until"))
+        if locked_until and locked_until > now:
+            raise AccountLockedError(locked_until)
+
+        # last_used, не revoke: иначе повторный hash не найдёт сессию
+        await self._repo.update_session_last_used(session["id"])
+
+        perms_version = await self._repo.get_permissions_version(user["id"])
+        new_access_token = create_access_token(
+            user_id=user["id"],
+            username=user["username"],
+            perms_version=perms_version,
+            secret=self._config.jwt_secret,
+            algorithm=self._config.jwt_algorithm,
+            expires_in_minutes=self._config.jwt_access_expiration_minutes,
+        )
+        new_refresh_token = create_refresh_token()
+        access_expires = now + timedelta(minutes=self._config.jwt_access_expiration_minutes)
+        refresh_expires_at = now + timedelta(days=self._config.jwt_refresh_expiration_days)
+        await self._repo.create_session(
+            user_id=user["id"],
+            access_hash=hash_token(new_access_token),
+            access_expires_at=access_expires,
+            refresh_hash=hash_token(new_refresh_token),
+            refresh_expires_at=refresh_expires_at,
+            user_agent=user_agent,
+            ip_address=ip,
+            family_id=session.get("family_id"),
+        )
+        if grace > 0:
+            self._refresh_grace[refresh_hash_val] = _RefreshGrace(
+                access_token=new_access_token,
+                refresh_token=new_refresh_token,
+                user_id=str(user["id"]),
+                username=str(user["username"]),
+                expires_at=now + timedelta(seconds=grace),
+            )
+        return {
+            "access_token": new_access_token,
+            "refresh_token": new_refresh_token,
+            "user_id": str(user["id"]),
+            "username": str(user["username"]),
+        }
+
+    def _need_repo(self) -> AuthRepository:
+        if self._repo is None:
+            raise AuthError("Auth not initialized (no Database Provider)")
+        return self._repo
+
+    def _self_id(
+        self,
+        session_user_id: str | None,
+        client_user_id: str | None,
+        *,
+        ignore_client: bool,
+    ) -> str:
+        if ignore_client:
+            uid = session_user_id or client_user_id
+        else:
+            uid = client_user_id or session_user_id
+        if not uid:
+            raise AuthError("Authentication required")
+        return str(uid)
+
+    async def _membership_target(
+        self, client_user_id: str | None, session_user_id: str | None,
+    ) -> str:
+        actor = session_user_id
+        if not actor:
+            if not client_user_id:
+                raise AuthError("Authentication required")
+            return str(client_user_id)
+        if client_user_id and str(client_user_id) != str(actor):
+            allowed = await self.check_permission(actor, "groups:manage_membership")
+            if not allowed:
+                raise ForbiddenError("Cannot manage another user's membership")
+            return str(client_user_id)
+        return str(actor)
+
+    async def _profile_dto(self, user_id: str) -> dict[str, Any]:
+        repo = self._need_repo()
+        row = await repo.get_profile(user_id)
+        if row is None:
+            raise NotFoundError("User")
+        bootstrap = bool(row.get("is_bootstrap_admin"))
+        mode = row.get("chip_display_mode") or "nickname"
+        if mode not in {"nickname", "full_name"}:
+            mode = "nickname"
+        has_file = await repo.has_avatar(user_id)
+        primary = await repo.get_primary_group_id(user_id)
+        return {
+            "user_id": str(row["id"]),
+            "username": row["username"],
+            "nickname": row.get("nickname"),
+            "first_name": row.get("first_name"),
+            "last_name": row.get("last_name"),
+            "email": row.get("email"),
+            "phone": row.get("phone"),
+            "avatar_url": AVATAR_URL if has_file else None,
+            "user_prompt": row.get("user_prompt"),
+            "chip_display_mode": mode,
+            "is_superadmin": bootstrap,
+            "is_bootstrap_admin": bootstrap,
+            "primary_group_id": primary,
+        }
+
+    def _group_dto(self, row: dict[str, Any], *, is_primary: bool) -> dict[str, Any]:
+        return {
+            "id": str(row.get("id") or row.get("group_id")),
+            "name": row.get("name"),
+            "description": row.get("description"),
+            "is_builtin": bool(row.get("is_builtin")),
+            "is_primary": is_primary,
+        }
 
     def _validate_password(self, password: str) -> None:
         """Валидация пароля по политике."""

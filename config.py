@@ -43,6 +43,9 @@ class AuthConfig:
     # Кеш прав
     perms_cache_ttl: int = 300  # секунды
 
+    # Повтор того же refresh-hash в окне → та же пара, не revoke family
+    refresh_grace_seconds: int = 8
+
     # БД (для прямого подключения, если пул не передан извне)
     db_host: str = "localhost"
     db_port: int = 5432
@@ -93,6 +96,7 @@ class AuthConfig:
             login_attempts_limit=int(os.getenv("AUTH_LOGIN_ATTEMPTS_LIMIT", "5")),
             login_block_minutes=int(os.getenv("AUTH_LOGIN_BLOCK_MINUTES", "15")),
             perms_cache_ttl=int(os.getenv("AUTH_PERMS_CACHE_TTL", "300")),
+            refresh_grace_seconds=int(os.getenv("AUTH_REFRESH_GRACE_SECONDS", "8")),
             db_host=os.getenv("AUTH_DB_HOST", "localhost"),
             db_port=int(os.getenv("AUTH_DB_PORT", "5432")),
             db_name=os.getenv("AUTH_DB_NAME", "mia"),

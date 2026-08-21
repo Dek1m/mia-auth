@@ -60,6 +60,7 @@ class MockPool:
             "auth.role_permissions": {},
             "auth.auth_sessions": {},
             "auth.password_history": {},
+            "auth.user_avatars": {},
         }
         self._seq: int = 0
 
@@ -68,11 +69,13 @@ class MockPool:
         return str(uuid.uuid4())
 
     def _find_table(self, query: str) -> str | None:
+        # Самое длинное имя: auth.users не должен ловить auth.user_avatars
         q = query.lower()
+        found: str | None = None
         for table in self._data:
-            if table in q:
-                return table
-        return None
+            if table in q and (found is None or len(table) > len(found)):
+                found = table
+        return found
 
     def execute(self, query: str, *params: Any) -> str:
         q = query.lower().strip()
@@ -263,8 +266,16 @@ class MockPool:
                 "is_disabled": False,
                 "login_attempts": 0,
                 "locked_until": None,
+                "nickname": None,
+                "phone": None,
+                "user_prompt": None,
+                "chip_display_mode": "nickname",
+                "is_bootstrap_admin": False,
                 "created_at": datetime.now(timezone.utc),
                 "updated_at": datetime.now(timezone.utc),
+            },
+            "auth.user_group_membership": {
+                "is_primary": False,
             },
             "auth.groups": {
                 "is_builtin": False,
@@ -469,4 +480,5 @@ def auth_config():
         login_attempts_limit=5,
         login_block_minutes=15,
         perms_cache_ttl=300,
+        refresh_grace_seconds=0,
     )

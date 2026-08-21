@@ -1,12 +1,15 @@
-"""Auth DB Schema — 11 таблиц модуля авторизации.
+"""Auth DB Schema — 12 таблиц модуля авторизации.
 
 Формат Schema-first: dict с ключом "columns".
-Колонки описаны строками SQL-типов и约束.
+Колонки описаны строками SQL-типов и ограничений.
 Ключ "schema" указывает PostgreSQL-схему для всех таблиц.
 Ключ "auto_id": False отключает автодобавление id UUID PK.
 Ключ "primary_key": [...] задаёт составной PK.
+Профиль albedo (ADR-001): отдельные колонки, не custom_fields JSONB.
 """
 from __future__ import annotations
+
+from typing import Any
 
 __all__ = ["DB_SCHEMA"]
 
@@ -31,7 +34,22 @@ DB_SCHEMA: dict[str, dict[str, Any]] = {
             "last_login": "TIMESTAMPTZ",
             "login_attempts": "INT DEFAULT 0",
             "custom_fields": "JSONB DEFAULT '{}'",
+            "nickname": "VARCHAR(255)",
+            "phone": "VARCHAR(32)",
+            "user_prompt": "TEXT",
+            "chip_display_mode": "VARCHAR(16) NOT NULL DEFAULT 'nickname'",
+            "is_bootstrap_admin": "BOOLEAN NOT NULL DEFAULT FALSE",
             "created_at": "TIMESTAMPTZ DEFAULT NOW()",
+            "updated_at": "TIMESTAMPTZ DEFAULT NOW()",
+        },
+    },
+    # ── Аватар (байты, не JSONB; MIME — в приложении, SVG запрещён) ─
+    "user_avatars": {
+        "auto_id": False,
+        "columns": {
+            "user_id": "UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE",
+            "bytes": "BYTEA NOT NULL",
+            "content_type": "VARCHAR(64) NOT NULL",
             "updated_at": "TIMESTAMPTZ DEFAULT NOW()",
         },
     },
@@ -77,6 +95,7 @@ DB_SCHEMA: dict[str, dict[str, Any]] = {
         "columns": {
             "user_id": "UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE",
             "group_id": "UUID NOT NULL REFERENCES auth.groups(id) ON DELETE CASCADE",
+            "is_primary": "BOOLEAN NOT NULL DEFAULT FALSE",
             "added_at": "TIMESTAMPTZ DEFAULT NOW()",
             "added_by": "UUID REFERENCES auth.users(id)",
         },

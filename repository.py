@@ -12,6 +12,29 @@ from typing import Any
 
 __all__ = ["AuthRepository"]
 
+# Колонки профиля — password_hash сюда не входит (ADR-001 §5.3)
+_PROFILE_COLUMNS = (
+    "id",
+    "username",
+    "nickname",
+    "first_name",
+    "last_name",
+    "email",
+    "phone",
+    "user_prompt",
+    "chip_display_mode",
+    "is_bootstrap_admin",
+)
+_PROFILE_UPDATE_FIELDS = frozenset({
+    "nickname",
+    "first_name",
+    "last_name",
+    "email",
+    "phone",
+    "user_prompt",
+    "chip_display_mode",
+})
+
 
 class AuthRepository:
     """Репозиторий для работы с auth-таблицами через Database Provider."""
@@ -63,6 +86,89 @@ class AuthRepository:
         """Получить пользователя по ID."""
         return await self._fetchrow(
             "SELECT * FROM auth.users WHERE id = %s", user_id,
+        )
+
+    async def get_profile(self, user_id: str) -> dict[str, Any] | None:
+        """Профиль без password_hash. Список колонок — контракт, не SELECT *."""
+        cols = ", ".join(_PROFILE_COLUMNS)
+        return await self._fetchrow(
+            f"SELECT {cols} FROM auth.users WHERE id = %s", user_id,
+        )
+
+    async def update_profile(
+        self, user_id: str, data: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """UPDATE только whitelist полей профиля."""
+        filtered = {key: value for key, value in data.items() if key in _PROFILE_UPDATE_FIELDS}
+        if not filtered:
+            return await self.get_profile(user_id)
+        assignments = ", ".join(f"{field} = %s" for field in filtered)
+        values: list[Any] = list(filtered.values())
+        values.append(user_id)
+        cols = ", ".join(_PROFILE_COLUMNS)
+        return await self._fetchrow(
+            f"UPDATE auth.users SET {assignments} WHERE id = %s RETURNING {cols}",
+            *values,
+        )
+
+    async def set_username(self, user_id: str, username: str) -> None:
+        self._database.execute(
+            "UPDATE auth.users SET username = %s WHERE id = %s",
+            username, user_id,
+        )
+
+    async def get_primary_group_id(self, user_id: str) -> str | None:
+        row = await self._fetchrow(
+            "SELECT group_id FROM auth.user_group_membership "
+            "WHERE user_id = %s AND is_primary = TRUE",
+            user_id,
+        )
+        if not row or row.get("group_id") is None:
+            return None
+        return str(row["group_id"])
+
+    async def get_avatar(self, user_id: str) -> dict[str, Any] | None:
+        return await self._fetchrow(
+            "SELECT user_id, bytes, content_type, updated_at "
+            "FROM auth.user_avatars WHERE user_id = %s",
+            user_id,
+        )
+
+    async def has_avatar(self, user_id: str) -> bool:
+        row = await self._fetchrow(
+            "SELECT user_id FROM auth.user_avatars WHERE user_id = %s",
+            user_id,
+        )
+        return row is not None
+
+    async def upsert_avatar(self, user_id: str, data: bytes, content_type: str) -> None:
+        if await self.has_avatar(user_id):
+            self._database.execute(
+                "UPDATE auth.user_avatars "
+                "SET bytes = %s, content_type = %s, updated_at = NOW() "
+                "WHERE user_id = %s",
+                data, content_type, user_id,
+            )
+            return
+        self._database.execute(
+            "INSERT INTO auth.user_avatars (user_id, bytes, content_type) "
+            "VALUES (%s, %s, %s)",
+            user_id, data, content_type,
+        )
+
+    async def delete_avatar(self, user_id: str) -> None:
+        self._database.execute(
+            "DELETE FROM auth.user_avatars WHERE user_id = %s", user_id,
+        )
+
+    async def get_membership(
+        self, user_id: str, group_id: str,
+    ) -> dict[str, Any] | None:
+        return await self._fetchrow(
+            "SELECT user_id, group_id, is_primary, added_at, added_by "
+            "FROM auth.user_group_membership "
+            "WHERE user_id = %s AND group_id = %s",
+            user_id, group_id,
         )
 
     async def get_user_by_username(self, username: str) -> dict[str, Any] | None:
@@ -403,13 +509,18 @@ class AuthRepository:
     # ─────────────────────────────────────────────
 
     async def add_user_to_group(
-        self, user_id: str, group_id: str, added_by: str | None = None,
+        self,
+        user_id: str,
+        group_id: str,
+        added_by: str | None = None,
+        is_primary: bool = False,
     ) -> None:
-        """Добавить пользователя в группу."""
+        """Добавить пользователя в группу. is_primary — только при создании."""
         self._database.execute(
-            "INSERT INTO auth.user_group_membership (user_id, group_id, added_by) "
-            "VALUES (%s, %s, %s) ON CONFLICT DO NOTHING",
-            user_id, group_id, added_by,
+            "INSERT INTO auth.user_group_membership "
+            "(user_id, group_id, added_by, is_primary) "
+            "VALUES (%s, %s, %s, %s) ON CONFLICT DO NOTHING",
+            user_id, group_id, added_by, is_primary,
         )
 
     async def remove_user_from_group(self, user_id: str, group_id: str) -> None:
@@ -420,15 +531,26 @@ class AuthRepository:
         )
 
     async def get_user_groups(self, user_id: str) -> list[dict[str, Any]]:
-        """Получить группы пользователя."""
-        rows = self._database.fetch(
-            "SELECT g.id, g.name, g.description, g.is_builtin, ugm.added_at "
-            "FROM auth.user_group_membership ugm "
-            "JOIN auth.groups g ON g.id = ugm.group_id "
-            "WHERE ugm.user_id = %s",
+        """Группы пользователя с is_primary. Два запроса — mock JOIN ломается."""
+        memberships = self._database.fetch(
+            "SELECT group_id, is_primary, added_at "
+            "FROM auth.user_group_membership WHERE user_id = %s",
             user_id,
         )
-        return [dict(r) for r in rows]
+        groups: list[dict[str, Any]] = []
+        for item in memberships:
+            group = await self.get_group(str(item["group_id"]))
+            if group is None:
+                continue
+            groups.append({
+                "id": group["id"],
+                "name": group["name"],
+                "description": group.get("description"),
+                "is_builtin": bool(group.get("is_builtin")),
+                "is_primary": bool(item.get("is_primary")),
+                "added_at": item.get("added_at"),
+            })
+        return groups
 
     # ─────────────────────────────────────────────
     # Связи: группы ↔ группы (иерархия)
