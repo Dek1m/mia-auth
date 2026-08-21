@@ -17,7 +17,6 @@ from typing import Any
 
 
 from .config import AuthConfig
-from .decorators import auth_method
 from .password import hash_password, verify_password, needs_rehash
 from .jwt import (
     create_access_token,
@@ -37,6 +36,17 @@ from core.task_decorator import task
 
 
 __all__ = ["AuthProvider", "UserContext"]
+
+
+def _as_utc(value: Any) -> datetime | None:
+    """Строка/naive datetime → aware UTC. Нужно для сравнения с now(timezone.utc)."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        value = datetime.fromisoformat(value)
+    if isinstance(value, datetime) and value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value if isinstance(value, datetime) else None
 
 
 # ── Контекст пользователя ──────────────────────────────
@@ -141,6 +151,14 @@ class AuthProvider:
             return
         self._log.warning(message, extra=extra)
 
+    def _info(self, message: str, extra: dict[str, Any] | None = None) -> None:
+        if self._log is None:
+            return
+        if extra is None:
+            self._log.info(message)
+        else:
+            self._log.info(message, extra=extra)
+
     @property
     def repository(self) -> AuthRepository | None:
         return self._repo
@@ -163,14 +181,14 @@ class AuthProvider:
         if self._registry is None:
             return
         await self._registry.register("auth", AUTH_CORE_SCHEMA, is_builtin=True)
-        self._log.info("Auth schema registered")
+        self._info("Auth schema registered")
 
     def initialize_sync(self) -> None:
         """Синхронная версия initialize для on_load."""
         if self._registry is None:
             return
         self._registry.register_sync("auth", AUTH_CORE_SCHEMA, is_builtin=True)
-        self._log.info("Auth schema registered")
+        self._info("Auth schema registered")
 
     # ─────────────────────────────────────────────
     # Пользователи (CRUD)
@@ -222,7 +240,7 @@ class AuthProvider:
             last_name=last_name,
         )
 
-        self._log.info("User created", extra={"user_id": str(user["id"]), "username": username})
+        self._info("User created", extra={"user_id": str(user["id"]), "username": username})
         return user
 
     @task(type="database")
@@ -279,7 +297,7 @@ class AuthProvider:
         if self._cache:
             self._cache.invalidate(user_id)
 
-        self._log.info("User deleted", extra={"user_id": user_id, "force": force})
+        self._info("User deleted", extra={"user_id": user_id, "force": force})
         return result
 
 
@@ -308,7 +326,7 @@ class AuthProvider:
         await self._repo.revoke_all_user_sessions(user_id)
         if self._cache:
             self._cache.invalidate(user_id)
-        self._log.info("User blocked", extra={"user_id": user_id, "until": until.isoformat()})
+        self._info("User blocked", extra={"user_id": user_id, "until": until.isoformat()})
 
 
     @task(type="database")
@@ -319,7 +337,7 @@ class AuthProvider:
         await self._repo.unblock_user(user_id)
         if self._cache:
             self._cache.invalidate(user_id)
-        self._log.info("User unblocked", extra={"user_id": user_id})
+        self._info("User unblocked", extra={"user_id": user_id})
 
 
     @task(type="database")
@@ -331,7 +349,7 @@ class AuthProvider:
         await self._repo.revoke_all_user_sessions(user_id)
         if self._cache:
             self._cache.invalidate(user_id)
-        self._log.info("User disabled", extra={"user_id": user_id})
+        self._info("User disabled", extra={"user_id": user_id})
 
 
     @task(type="database")
@@ -342,7 +360,7 @@ class AuthProvider:
         await self._repo.enable_user(user_id)
         if self._cache:
             self._cache.invalidate(user_id)
-        self._log.info("User enabled", extra={"user_id": user_id})
+        self._info("User enabled", extra={"user_id": user_id})
 
     # ─────────────────────────────────────────────
     # Пароли
@@ -372,14 +390,22 @@ class AuthProvider:
         await self._repo.save_password_history(user_id, new_hash)
         await self._repo.prune_password_history(user_id, self._config.password_history_size)
 
-        self._log.info("Password changed", extra={"user_id": user_id})
+        self._info("Password changed", extra={"user_id": user_id})
 
     # ─────────────────────────────────────────────
     # Аутентификация
     # ─────────────────────────────────────────────
 
 
-    @task(type="cpu")
+    @task(
+        type="cpu",
+        api=True,
+        public=True,
+        name="login",
+        description="Аутентификация пользователя",
+        args={"username": "str", "password": "str", "user_agent": "str", "ip": "str"},
+        return_type="dict",
+    )
     async def login(
         self,
         username: str,
@@ -411,14 +437,11 @@ class AuthProvider:
             raise AccountDisabledError()
 
         # Проверка блокировки
-        locked_until = user.get("locked_until")
+        locked_until = _as_utc(user.get("locked_until"))
         if locked_until:
-            if isinstance(locked_until, str):
-                locked_until = datetime.fromisoformat(locked_until)
             if locked_until > datetime.now(timezone.utc):
                 self._warn("login_failed", username=username, reason="locked")
                 raise AccountLockedError(locked_until)
-            # Блокировка истекла — разблокируем
             await self._repo.unblock_user(user["id"])
 
         # Проверка пароля
@@ -487,7 +510,7 @@ class AuthProvider:
             family_id=family_id,
         )
 
-        self._log.info(
+        self._info(
             "User logged in",
             extra={"user_id": str(user["id"]), "username": username},
         )
@@ -500,7 +523,14 @@ class AuthProvider:
         }
 
 
-    @task(type="cpu")
+    @task(
+        type="cpu",
+        api=True,
+        name="refresh_token",
+        description="Обновить access token через refresh token",
+        args={"refresh_token": "str", "user_agent": "str", "ip": "str"},
+        return_type="dict",
+    )
     async def refresh_token(
         self,
         refresh_token: str,
@@ -535,16 +565,15 @@ class AuthProvider:
             family_id = session.get("family_id")
             if family_id:
                 await self._repo.revoke_family(family_id)
-            self._log.warning(
+            self._warn(
                 "Refresh token reuse detected",
-                extra={"session_id": str(session["id"]), "user_id": str(session["user_id"])},
+                session_id=str(session["id"]),
+                user_id=str(session["user_id"]),
             )
             raise ReuseDetectedError()
 
         # Проверка срока действия
-        refresh_expires = session.get("refresh_expires_at")
-        if isinstance(refresh_expires, str):
-            refresh_expires = datetime.fromisoformat(refresh_expires)
+        refresh_expires = _as_utc(session.get("refresh_expires_at"))
         if refresh_expires and refresh_expires < datetime.now(timezone.utc):
             raise AuthError("Refresh token has expired")
 
@@ -553,13 +582,9 @@ class AuthProvider:
         if not user or not user.get("is_active") or user.get("is_disabled"):
             raise AuthError("User account is not available")
 
-        # Проверка блокировки
-        locked_until = user.get("locked_until")
-        if locked_until:
-            if isinstance(locked_until, str):
-                locked_until = datetime.fromisoformat(locked_until)
-            if locked_until and locked_until > datetime.now(timezone.utc):
-                raise AccountLockedError(locked_until)
+        locked_until = _as_utc(user.get("locked_until"))
+        if locked_until and locked_until > datetime.now(timezone.utc):
+            raise AccountLockedError(locked_until)
 
         # Помечаем старую сессию как использованную (НЕ отзываем —
         # иначе reuse detection не сработает: get_session_by_refresh
@@ -605,7 +630,14 @@ class AuthProvider:
         }
 
 
-    @task(type="database")
+    @task(
+        type="database",
+        api=True,
+        name="logout",
+        description="Выход пользователя — отзыв сессии по refresh token",
+        args={"refresh_token": "str"},
+        return_type="bool",
+    )
     async def logout(self, refresh_token: str) -> bool:
         """Выход пользователя — отзыв сессии по refresh token."""
         if self._repo is None:
@@ -617,7 +649,7 @@ class AuthProvider:
             return False
 
         await self._repo.revoke_session(session["id"])
-        self._log.info("User logged out", extra={"user_id": str(session["user_id"])})
+        self._info("User logged out", extra={"user_id": str(session["user_id"])})
         return True
 
     # ─────────────────────────────────────────────
@@ -659,16 +691,11 @@ class AuthProvider:
         if not user or not user.get("is_active") or user.get("is_disabled"):
             return None
 
-        locked_until = user.get("locked_until")
-        if locked_until:
-            if isinstance(locked_until, str):
-                locked_until = datetime.fromisoformat(locked_until)
-            if locked_until and locked_until > datetime.now(timezone.utc):
-                return None
+        locked_until = _as_utc(user.get("locked_until"))
+        if locked_until and locked_until > datetime.now(timezone.utc):
+            return None
 
-        # Обновляем last_used_at
-        await self._repo.update_session_last_used(session["id"])
-
+        # last_used_at — маркер refresh-reuse, не activity access-токена
         return UserContext(
             user_id=user_id,
             username=user["username"],
@@ -962,28 +989,30 @@ class AuthProvider:
     # Bootstrap
     # ─────────────────────────────────────────────
 
-    @auth_method(
+    @task(
+        type="database",
+        api=True,
+        public=True,
         name="needs_bootstrap",
         description="Проверить, нужен ли bootstrap (нет system_admin)",
         args={},
         return_type="bool",
-        public=True,
     )
-    @task(type="database")
     async def needs_bootstrap(self) -> bool:
         """Проверить, нужен ли bootstrap."""
         if self._bootstrap is None:
             return False
         return await self._bootstrap.needs_bootstrap()
 
-    @auth_method(
+    @task(
+        type="database",
+        api=True,
+        public=True,
         name="bootstrap",
         description="Создать первого системного администратора",
         args={"username": "str", "password": "str", "email": "str"},
         return_type="dict",
-        public=True,
     )
-    @task(type="database")
     async def bootstrap(
         self, username: str, password: str, email: str | None = None,
     ) -> dict[str, Any]:
