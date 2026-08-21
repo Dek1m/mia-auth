@@ -102,4 +102,4 @@ class AuthBootstrap:
                 extra={"user_id": user_id, "username": username},
             )
 
-        return {"user_id": user_id, "username": username}
+        return {"user_id": str(user_id), "username": username}
