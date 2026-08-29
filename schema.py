@@ -10,6 +10,7 @@ __all__ = ["AUTH_CORE_SCHEMA"]
 
 AUTH_CORE_SCHEMA: dict[str, list[dict[str, Any]]] = {
     "permissions": [
+        {"name": "*:*", "description": "Полный доступ ко всем ресурсам"},
         # === users ===
         {"name": "users:create", "description": "Создание пользователей"},
         {"name": "users:update", "description": "Обновление данных пользователей"},
