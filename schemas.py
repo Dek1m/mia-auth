@@ -73,6 +73,7 @@ DB_SCHEMA: dict[str, dict[str, Any]] = {
             "description": "TEXT",
             "is_builtin": "BOOLEAN DEFAULT FALSE",
             "source_module": "VARCHAR(100)",
+            "capability_mask": "BIGINT NOT NULL DEFAULT 0",
             "created_at": "TIMESTAMPTZ DEFAULT NOW()",
             "updated_at": "TIMESTAMPTZ DEFAULT NOW()",
         },

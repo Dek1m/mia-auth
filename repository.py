@@ -36,6 +36,31 @@ _PROFILE_UPDATE_FIELDS = frozenset({
     "user_prompt",
     "chip_display_mode",
 })
+# Имена колонок — не из клиента. password_hash / id сюда не входят.
+_USER_UPDATE_FIELDS = frozenset({
+    "username",
+    "first_name",
+    "last_name",
+    "email",
+    "description",
+    "is_active",
+    "locked_until",
+    "is_disabled",
+    "disabled_at",
+    "enabled_at",
+    "last_login",
+    "login_attempts",
+    "custom_fields",
+    "nickname",
+    "phone",
+    "user_prompt",
+    "chip_display_mode",
+    "ui_windows",
+})
+_GROUP_UPDATE_FIELDS = frozenset({"name", "description", "is_builtin"})
+_ROLE_UPDATE_FIELDS = frozenset({
+    "name", "description", "is_builtin", "source_module", "capability_mask",
+})
 
 
 class AuthRepository:
@@ -44,6 +69,26 @@ class AuthRepository:
     def __init__(self, database: Any, log: Any | None = None) -> None:
         self._database = database
         self._log = log
+
+    async def _update_filtered(
+        self,
+        table: str,
+        row_id: str,
+        data: dict[str, Any],
+        allowed: frozenset[str],
+        fallback: Any,
+    ) -> dict[str, Any] | None:
+        """UPDATE только whitelist колонок, плейсхолдеры %s."""
+        filtered = {key: value for key, value in data.items() if key in allowed}
+        if not filtered:
+            return await fallback(row_id)
+        assignments = ", ".join(f"{field} = %s" for field in filtered)
+        values: list[Any] = list(filtered.values())
+        values.append(row_id)
+        return await self._fetchrow(
+            f"UPDATE {table} SET {assignments} WHERE id = %s RETURNING *",
+            *values,
+        )
 
     async def _fetchrow(self, query: str, *params: Any) -> dict[str, Any] | None:
         """Получить одну строку или None (аналог pool.fetchrow)."""
@@ -209,23 +254,9 @@ class AuthRepository:
 
     async def update_user(self, user_id: str, data: dict[str, Any]) -> dict[str, Any] | None:
         """Обновить пользователя. data = {field: value}."""
-        if not data:
-            return await self.get_user(user_id)
-
-        set_clauses = []
-        values: list[Any] = []
-        for i, (field, value) in enumerate(data.items(), 1):
-            set_clauses.append(f"{field} = ${i}")
-            values.append(value)
-
-        values.append(user_id)
-        idx = len(values)
-
-        query = (
-            f"UPDATE auth.users SET {', '.join(set_clauses)} "
-            f"WHERE id = ${idx} RETURNING *"
+        return await self._update_filtered(
+            "auth.users", user_id, data, _USER_UPDATE_FIELDS, self.get_user,
         )
-        return await self._fetchrow(query, *values)
 
     async def delete_user(self, user_id: str) -> bool:
         """Удалить пользователя."""
@@ -395,22 +426,20 @@ class AuthRepository:
 
     async def update_group(self, group_id: str, data: dict[str, Any]) -> dict[str, Any] | None:
         """Обновить группу."""
-        if not data:
-            return await self.get_group(group_id)
-
-        set_clauses = []
-        values: list[Any] = []
-        for i, (field, value) in enumerate(data.items(), 1):
-            set_clauses.append(f"{field} = ${i}")
-            values.append(value)
-
-        values.append(group_id)
-        idx = len(values)
-        query = (
-            f"UPDATE auth.groups SET {', '.join(set_clauses)} "
-            f"WHERE id = ${idx} RETURNING *"
+        return await self._update_filtered(
+            "auth.groups", group_id, data, _GROUP_UPDATE_FIELDS, self.get_group,
         )
-        return await self._fetchrow(query, *values)
+
+    async def set_group_name(
+        self, group_id: str, name: str,
+    ) -> dict[str, Any] | None:
+        """Переименовать группу. %s — не $1 (DatabaseProvider)."""
+        return await self._fetchrow(
+            "UPDATE auth.groups SET name = %s WHERE id = %s "
+            "RETURNING id, name, description, is_builtin",
+            name,
+            group_id,
+        )
 
     async def delete_group(self, group_id: str) -> bool:
         """Удалить группу."""
@@ -483,22 +512,9 @@ class AuthRepository:
 
     async def update_role(self, role_id: str, data: dict[str, Any]) -> dict[str, Any] | None:
         """Обновить роль."""
-        if not data:
-            return await self.get_role(role_id)
-
-        set_clauses = []
-        values: list[Any] = []
-        for i, (field, value) in enumerate(data.items(), 1):
-            set_clauses.append(f"{field} = ${i}")
-            values.append(value)
-
-        values.append(role_id)
-        idx = len(values)
-        query = (
-            f"UPDATE auth.roles SET {', '.join(set_clauses)} "
-            f"WHERE id = ${idx} RETURNING *"
+        return await self._update_filtered(
+            "auth.roles", role_id, data, _ROLE_UPDATE_FIELDS, self.get_role,
         )
-        return await self._fetchrow(query, *values)
 
     async def delete_role(self, role_id: str) -> bool:
         """Удалить роль."""

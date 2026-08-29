@@ -21,12 +21,20 @@ from typing import Any
 from modules_system.module_base import ModuleBase, ModuleMeta
 from .provider import AuthProvider
 from .config import AuthConfig
+from .domain import Domain
+from .folder import Folder
+from .group import Group
+from .role import Role
 from .user import User
 
 __all__ = [
     "AuthModule",
     "AuthProvider",
     "AuthConfig",
+    "Domain",
+    "Folder",
+    "Group",
+    "Role",
     "User",
 ]
 
@@ -89,6 +97,9 @@ class AuthModule(ModuleBase):
             self._provider.initialize_sync()
         except Exception as exc:
             self._log.warning("auth_schema_seed_skipped", extra={"error": str(exc)})
+
+        # repo может быть None, если database не дошёл до AuthProvider
+        state.domain = Domain(auth_repo=self._provider._repo)
 
         self._log.info("AuthModule loaded (Phase 1: PostgreSQL)")
 

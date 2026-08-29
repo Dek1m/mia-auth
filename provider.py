@@ -569,7 +569,7 @@ class AuthProvider:
         _session_user_id: str | None = None,
     ) -> dict[str, Any]:
         # _session_user_id: метод не public — нужен валидный access
-        items, total = await self.list_groups(offset, limit)
+        items, total = await self._need_repo().list_groups(offset, limit)
         return {
             "items": [self._group_dto(item, is_primary=False) for item in items],
             "total": total,
@@ -905,12 +905,8 @@ class AuthProvider:
         )
 
 
-    @task(type="database")
-    async def check_permission(self, user_id: str, permission: str) -> bool:
-        """Проверить разрешение пользователя.
-
-        Поддержка wildcard: *:* и resource:*
-        """
+    async def _permission_allowed(self, user_id: str, permission: str) -> bool:
+        """Проверка права без @task — иначе nested Redis deadlock."""
         if self._repo is None:
             self._warn("permission_denied_no_repo", user_id=user_id, permission=permission)
             return False
@@ -971,6 +967,14 @@ class AuthProvider:
         else:
             self._warn("permission_checked", **payload)
         return allowed
+
+    @task(type="database")
+    async def check_permission(self, user_id: str, permission: str) -> bool:
+        """Проверить разрешение пользователя.
+
+        Поддержка wildcard: *:* и resource:*
+        """
+        return await self._permission_allowed(user_id, permission)
 
     def _check_permission_set(self, perms: frozenset[str], permission: str) -> bool:
         """Проверить permission в наборе с поддержкой wildcard."""
@@ -1075,7 +1079,7 @@ class AuthProvider:
         if not group_id:
             raise ValueError("group_id is required")
         if _session_user_id:
-            allowed = await self.check_permission(str(_session_user_id), "groups:manage_membership")
+            allowed = await self._permission_allowed(str(_session_user_id), "groups:manage_membership")
             if not allowed:
                 raise ForbiddenError("Only an administrator can change group membership")
             group = await self._repo.get_group(group_id)
@@ -1105,7 +1109,7 @@ class AuthProvider:
         if not group_id:
             raise ValueError("group_id is required")
         if _session_user_id:
-            allowed = await self.check_permission(str(_session_user_id), "groups:manage_membership")
+            allowed = await self._permission_allowed(str(_session_user_id), "groups:manage_membership")
             if not allowed:
                 raise ForbiddenError("Only an administrator can change group membership")
             group = await self._repo.get_group(group_id)
@@ -1456,7 +1460,7 @@ class AuthProvider:
                 raise AuthError("Authentication required")
             return str(client_user_id)
         if client_user_id and str(client_user_id) != str(actor):
-            allowed = await self.check_permission(actor, "groups:manage_membership")
+            allowed = await self._permission_allowed(actor, "groups:manage_membership")
             if not allowed:
                 raise ForbiddenError("Cannot manage another user's membership")
             return str(client_user_id)

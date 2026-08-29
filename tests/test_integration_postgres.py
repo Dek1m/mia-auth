@@ -22,7 +22,7 @@ try:
                 host=os.getenv("DB_HOST", os.getenv("MIA_TEST_PG_HOST", "postgres")),
                 port=int(os.getenv("DB_PORT", os.getenv("MIA_TEST_PG_PORT", "5432"))),
                 user=os.getenv("DB_USER", os.getenv("MIA_TEST_PG_USER", "svc_athene_ai")),
-                password=os.getenv("DB_PASSWORD", os.getenv("MIA_TEST_PG_PASSWORD", "GUNW7ryP3V8kgLXFHQvm")),
+                password=os.getenv("DB_PASSWORD", os.getenv("MIA_TEST_PG_PASSWORD", "")),
                 dbname=os.getenv("DB_NAME", os.getenv("MIA_TEST_PG_DB", "belle")),
             )
             conn.close()
@@ -45,7 +45,7 @@ pytestmark = pytest.mark.skipif(
 TEST_HOST = os.getenv("DB_HOST", os.getenv("MIA_TEST_PG_HOST", "postgres"))
 TEST_PORT = int(os.getenv("DB_PORT", os.getenv("MIA_TEST_PG_PORT", "5432")))
 TEST_USER = os.getenv("DB_USER", os.getenv("MIA_TEST_PG_USER", "svc_athene_ai"))
-TEST_PASSWORD = os.getenv("DB_PASSWORD", os.getenv("MIA_TEST_PG_PASSWORD", "GUNW7ryP3V8kgLXFHQvm"))
+TEST_PASSWORD = os.getenv("DB_PASSWORD", os.getenv("MIA_TEST_PG_PASSWORD", ""))
 TEST_DB = os.getenv("DB_NAME", os.getenv("MIA_TEST_PG_DB", "belle"))
 
 

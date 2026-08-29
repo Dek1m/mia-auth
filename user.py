@@ -15,7 +15,10 @@
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from .folder import Folder
 
 __all__ = ["User"]
 
@@ -31,19 +34,22 @@ class User:
     Attributes:
         _uuid: UUID пользователя (immutable).
         _repo: AuthRepository для запросов.
+        _domain: Domain для folder(); может быть None у старых вызовов.
         _data: Кэш данных пользователя (None = ещё не загружен).
         _loaded: Флаг загрузки.
     """
 
-    __slots__ = ("_uuid", "_repo", "_data", "_loaded")
+    __slots__ = ("_uuid", "_repo", "_domain", "_data", "_loaded")
 
-    def __init__(self, uuid: str, repo: Any) -> None:
+    def __init__(self, uuid: str, repo: Any, domain: Any | None = None) -> None:
         """Args:
             uuid: UUID пользователя.
             repo: AuthRepository instance (предоставляет get_user, get_user_groups и т.д.).
+            domain: Domain для User.folder(); опционален.
         """
         self._uuid = uuid
         self._repo = repo
+        self._domain = domain
         self._data: dict[str, Any] | None = None
         self._loaded = False
 
@@ -145,6 +151,43 @@ class User:
     async def is_admin(self) -> bool:
         """Является ли пользователь system_admin."""
         return await self._repo.is_user_admin(self._uuid)
+
+    async def folder(self) -> Folder | None:
+        """OU пользователя или None, если нет привязки."""
+        from .folder import Folder
+        from .folder_port import FolderStoreUnbound
+
+        if self._domain is None:
+            raise FolderStoreUnbound("Domain is not bound to User")
+        row = await self._domain._folders().get_user_ou(self._uuid)
+        if not row:
+            return None
+        ou_id = row.get("id") or row.get("ou_id")
+        if ou_id is None:
+            return None
+        data = row if "name" in row else None
+        return Folder(str(ou_id), self._domain, data=data)
+
+    async def rename(self, username: str) -> None:
+        """set_username через auth_repo. Не nested @task."""
+        from .errors import DomainError, require_name
+
+        cleaned = require_name(username)
+        if self._repo is None:
+            raise DomainError("Auth not initialized", "VALIDATION")
+        user = await self._repo.get_user(self._uuid)
+        if not user:
+            raise DomainError("User not found", "NOT_FOUND", entity="User")
+        clash = await self._repo.get_user_by_username(cleaned)
+        if clash and str(clash["id"]) != self._uuid:
+            raise DomainError(
+                f"User {cleaned!r} exists",
+                "DUPLICATE_NAME",
+                human="User already exists",
+            )
+        await self._repo.set_username(self._uuid, cleaned)
+        self._loaded = False
+        self._data = None
 
     # ── Магические методы ─────────────────────────────────────────
 
