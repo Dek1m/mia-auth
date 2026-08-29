@@ -19,6 +19,7 @@ _PROFILE_COLUMNS = (
     "nickname",
     "first_name",
     "last_name",
+    "date_of_birth",
     "email",
     "phone",
     "user_prompt",
@@ -29,6 +30,7 @@ _PROFILE_UPDATE_FIELDS = frozenset({
     "nickname",
     "first_name",
     "last_name",
+    "date_of_birth",
     "email",
     "phone",
     "user_prompt",
@@ -126,6 +128,28 @@ class AuthRepository:
         if not row or row.get("group_id") is None:
             return None
         return str(row["group_id"])
+
+    async def get_ui_windows(self, user_id: str) -> dict[str, Any]:
+        row = await self._fetchrow(
+            "SELECT ui_windows FROM auth.users WHERE id = %s", user_id,
+        )
+        raw = row.get("ui_windows") if row else None
+        return dict(raw) if isinstance(raw, dict) else {}
+
+    async def merge_ui_window(
+        self, user_id: str, window_id: str, geom: dict[str, float],
+    ) -> dict[str, Any]:
+        import json
+
+        patch = json.dumps({window_id: geom})
+        row = await self._fetchrow(
+            "UPDATE auth.users SET ui_windows = COALESCE(ui_windows, '{}'::jsonb) || %s::jsonb "
+            "WHERE id = %s RETURNING ui_windows",
+            patch,
+            user_id,
+        )
+        raw = row.get("ui_windows") if row else None
+        return dict(raw) if isinstance(raw, dict) else {}
 
     async def get_avatar(self, user_id: str) -> dict[str, Any] | None:
         return await self._fetchrow(

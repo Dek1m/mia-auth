@@ -39,6 +39,7 @@ DB_SCHEMA: dict[str, dict[str, Any]] = {
             "user_prompt": "TEXT",
             "chip_display_mode": "VARCHAR(16) NOT NULL DEFAULT 'nickname'",
             "is_bootstrap_admin": "BOOLEAN NOT NULL DEFAULT FALSE",
+            "ui_windows": "JSONB NOT NULL DEFAULT '{}'::jsonb",
             "created_at": "TIMESTAMPTZ DEFAULT NOW()",
             "updated_at": "TIMESTAMPTZ DEFAULT NOW()",
         },

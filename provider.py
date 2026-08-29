@@ -357,12 +357,60 @@ class AuthProvider:
     @task(
         type="database",
         api=True,
+        name="get_windows",
+        description="Сохранённые размеры окон albedo",
+        args={},
+        return_type="dict",
+    )
+    async def get_windows(
+        self,
+        user_id: str | None = None,
+        _session_user_id: str | None = None,
+    ) -> dict[str, Any]:
+        uid = self._self_id(_session_user_id, user_id, ignore_client=True)
+        return {"items": await self._need_repo().get_ui_windows(uid)}
+
+    @task(
+        type="database",
+        api=True,
+        name="save_window",
+        description="Записать геометрию окна при закрытии",
+        args={"window_id": "str", "x": "float", "y": "float", "w": "float", "h": "float"},
+        return_type="dict",
+    )
+    async def save_window(
+        self,
+        window_id: str,
+        x: float,
+        y: float,
+        w: float,
+        h: float,
+        user_id: str | None = None,
+        _session_user_id: str | None = None,
+    ) -> dict[str, Any]:
+        uid = self._self_id(_session_user_id, user_id, ignore_client=True)
+        key = window_id.strip().lower()
+        if not key or len(key) > 64 or any(ch not in "abcdefghijklmnopqrstuvwxyz0123456789-" for ch in key):
+            raise ValueError("invalid window_id")
+        geom = {
+            "x": min(1.0, max(0.0, float(x))),
+            "y": min(1.0, max(0.0, float(y))),
+            "w": min(1.0, max(0.05, float(w))),
+            "h": min(1.0, max(0.05, float(h))),
+        }
+        items = await self._need_repo().merge_ui_window(uid, key, geom)
+        return {"items": items}
+
+    @task(
+        type="database",
+        api=True,
         name="update_me",
         description="Обновить свой профиль",
         args={
             "nickname": "str",
             "first_name": "str",
             "last_name": "str",
+            "date_of_birth": "str",
             "email": "str",
             "phone": "str",
             "user_prompt": "str",
@@ -375,6 +423,7 @@ class AuthProvider:
         nickname: str | None = None,
         first_name: str | None = None,
         last_name: str | None = None,
+        date_of_birth: str | None = None,
         email: str | None = None,
         phone: str | None = None,
         user_prompt: str | None = None,
@@ -388,6 +437,7 @@ class AuthProvider:
             ("nickname", nickname),
             ("first_name", first_name),
             ("last_name", last_name),
+            ("date_of_birth", date_of_birth),
             ("email", email),
             ("phone", phone),
             ("user_prompt", user_prompt),
@@ -1366,6 +1416,7 @@ class AuthProvider:
             "nickname": row.get("nickname"),
             "first_name": row.get("first_name"),
             "last_name": row.get("last_name"),
+            "date_of_birth": row.get("date_of_birth").isoformat() if row.get("date_of_birth") else None,
             "email": row.get("email"),
             "phone": row.get("phone"),
             "avatar_url": AVATAR_URL if has_file else None,
