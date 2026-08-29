@@ -163,6 +163,22 @@ class AuthSchemaRegistry:
             "Everyone",
             "All users of the system",
         )
+        group_row = self._fetchrow(
+            "SELECT id FROM auth.groups WHERE name = %s",
+            "Administrators",
+        )
+        role_row = self._fetchrow(
+            "SELECT id FROM auth.roles WHERE name = %s",
+            "system_admin",
+        )
+        if group_row is None or role_row is None:
+            return
+        self._database.execute(
+            "INSERT INTO auth.group_roles (group_id, role_id) "
+            "VALUES (%s, %s) ON CONFLICT DO NOTHING",
+            group_row["id"],
+            role_row["id"],
+        )
 
     async def register(
         self,

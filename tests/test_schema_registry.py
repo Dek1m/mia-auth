@@ -24,6 +24,8 @@ class RegistryMockPool:
         self._permissions: dict[str, dict] = {}  # name → {id, source_module, description, is_builtin}
         self._roles: dict[str, dict] = {}  # name → {id, source_module, description, is_builtin}
         self._role_permissions: dict[str, list[str]] = {}  # role_name → [perm_names]
+        self._groups: dict[str, dict] = {}
+        self._group_roles: list[tuple[str, str]] = []
         self._seq = 0
 
     def fetchrow(self, query: str, *args):
@@ -97,6 +99,14 @@ class RegistryMockPool:
                 if rv["id"] == role_id:
                     self._role_permissions[rn] = []
                     break
+        elif "INSERT INTO auth.groups" in query:
+            name = args[0]
+            description = args[1]
+            if name not in self._groups:
+                self._seq += 1
+                self._groups[name] = {"id": str(self._seq), "description": description, "is_builtin": True}
+        elif "INSERT INTO auth.group_roles" in query:
+            self._group_roles.append((str(args[0]), str(args[1])))
         elif "INSERT INTO auth.role_permissions" in query and "ON CONFLICT" in query:
             role_id = args[0]
             perm_id = args[1]
@@ -120,6 +130,10 @@ class RegistryMockPool:
             name = args[0]
             r = self._roles.get(name)
             return [{"source_module": r["source_module"]}] if r else []
+        if "SELECT id FROM auth.groups" in query:
+            name = args[0]
+            g = self._groups.get(name)
+            return [{"id": g["id"]}] if g else []
         if "SELECT id FROM auth.roles" in query:
             name = args[0]
             r = self._roles.get(name)
@@ -166,6 +180,9 @@ async def test_bug_auth_core_schema_cannot_be_registered(
     assert "users:create" in result["created_permissions"]
     assert "profile:self" in result["created_permissions"]
     assert "system_admin" in result["created_roles"]
+    admin_group = pool._groups["Administrators"]
+    admin_role = pool._roles["system_admin"]
+    assert (admin_group["id"], admin_role["id"]) in pool._group_roles
 
 
 # ── Валидация namespace (для обычных модулей) ────────────
