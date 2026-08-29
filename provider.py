@@ -1074,6 +1074,13 @@ class AuthProvider:
             raise AuthError("Auth not initialized (no Database Provider)")
         if not group_id:
             raise ValueError("group_id is required")
+        if _session_user_id:
+            allowed = await self.check_permission(str(_session_user_id), "groups:manage_membership")
+            if not allowed:
+                raise ForbiddenError("Only an administrator can change group membership")
+            group = await self._repo.get_group(group_id)
+            if group and group.get("name") == "Everyone":
+                raise ForbiddenError("Everyone already includes all users")
         target = await self._membership_target(user_id, _session_user_id)
         await self._repo.add_user_to_group(target, group_id, added_by or _session_user_id)
         return True
@@ -1097,6 +1104,13 @@ class AuthProvider:
             raise AuthError("Auth not initialized (no Database Provider)")
         if not group_id:
             raise ValueError("group_id is required")
+        if _session_user_id:
+            allowed = await self.check_permission(str(_session_user_id), "groups:manage_membership")
+            if not allowed:
+                raise ForbiddenError("Only an administrator can change group membership")
+            group = await self._repo.get_group(group_id)
+            if group and group.get("name") == "Everyone":
+                raise ForbiddenError("Everyone already includes all users")
         target = await self._membership_target(user_id, _session_user_id)
         membership = await self._repo.get_membership(target, group_id)
         if membership is None:

@@ -170,6 +170,13 @@ class AuthSchemaRegistry:
             "Administrators",
             "Встроенная группа системных администраторов",
         )
+        self._database.execute(
+            "INSERT INTO auth.groups (name, description, is_builtin) "
+            "VALUES (%s, %s, TRUE) "
+            "ON CONFLICT (name) DO UPDATE SET is_builtin = TRUE",
+            "Everyone",
+            "All users of the system",
+        )
 
     async def register(
         self,
