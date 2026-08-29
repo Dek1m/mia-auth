@@ -694,6 +694,7 @@ class AuthRepository:
             "WHERE ur.user_id = %s "
             "ORDER BY min_depth",
             user_id,
+            user_id,
         )
         return [dict(r) for r in rows]
 
@@ -726,6 +727,7 @@ class AuthRepository:
             "  SELECT gr.role_id FROM auth.group_roles gr "
             "  WHERE gr.group_id IN (SELECT group_id FROM group_hierarchy)"
             ")",
+            user_id,
             user_id,
         )
         return frozenset(row["name"] for row in rows)
