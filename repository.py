@@ -959,6 +959,17 @@ class AuthRepository:
         )
         return [dict(p) for p in rows]
 
+    async def copy_role_permissions(self, source_id: str, target_id: str) -> None:
+        """Скопировать все role_permissions, не только mapped."""
+        self._database.execute(
+            "INSERT INTO auth.role_permissions (role_id, permission_id) "
+            "SELECT %s, rp.permission_id FROM auth.role_permissions rp "
+            "WHERE rp.role_id = %s "
+            "ON CONFLICT DO NOTHING",
+            target_id,
+            source_id,
+        )
+
     async def find_role_by_name(self, name: str) -> dict[str, Any] | None:
         """Найти роль по имени."""
         return await self._fetchrow(
