@@ -359,6 +359,7 @@ class AuthProvider:
         api=True,
         name="get_windows",
         description="Сохранённые размеры окон albedo",
+        permission="profile:self",
         args={},
         return_type="dict",
     )
@@ -375,6 +376,7 @@ class AuthProvider:
         api=True,
         name="save_window",
         description="Записать геометрию окна при закрытии",
+        permission="profile:self",
         args={"window_id": "str", "x": "float", "y": "float", "w": "float", "h": "float"},
         return_type="dict",
     )
