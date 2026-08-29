@@ -128,6 +128,10 @@ class RegistryMockPool:
             name = args[0]
             p = self._permissions.get(name)
             return [{"id": p["id"]}] if p else []
+        if "SELECT id, name FROM auth.permissions" in query:
+            return [{"id": p["id"], "name": n} for n, p in self._permissions.items()]
+        if "SELECT name FROM auth.permissions" in query:
+            return [{"name": n} for n in self._permissions]
         return []
 
 
@@ -157,8 +161,8 @@ async def test_bug_auth_core_schema_cannot_be_registered(
     Namespace-проверка пропускается для module_name == "auth".
     """
     result = await registry.register("auth", AUTH_CORE_SCHEMA, is_builtin=True)
-    assert len(result["created_permissions"]) == 22
-    assert len(result["created_roles"]) == 4
+    assert len(result["created_permissions"]) == len(AUTH_CORE_SCHEMA["permissions"])
+    assert len(result["created_roles"]) == len(AUTH_CORE_SCHEMA["roles"])
     assert "users:create" in result["created_permissions"]
     assert "profile:self" in result["created_permissions"]
     assert "system_admin" in result["created_roles"]
@@ -490,6 +494,42 @@ async def test_wildcard_resource_star_no_permissions_found(
     }
     with pytest.raises(ValueError, match="no permissions found for resource"):
         await registry.register("workspace", schema2)
+
+
+@pytest.mark.asyncio
+async def test_role_may_reference_other_module_permissions(
+    registry: AuthSchemaRegistry, pool: RegistryMockPool,
+):
+    """admin_operator: users:* / roles:inspect из уже зарегистрированного auth."""
+    await registry.register("auth", {
+        "permissions": [
+            {"name": "users:create", "description": "Create users"},
+            {"name": "users:list", "description": "List users"},
+            {"name": "roles:inspect", "description": "Inspect roles"},
+        ],
+        "roles": [],
+    })
+    result = await registry.register("admin", {
+        "permissions": [
+            {"name": "admin:domain_read", "description": "Read domain"},
+            {"name": "admin:domain_write", "description": "Write domain"},
+        ],
+        "roles": [
+            {
+                "name": "admin_operator",
+                "description": "Domain operator",
+                "permissions": [
+                    "admin:domain_read",
+                    "admin:domain_write",
+                    "users:*",
+                    "roles:inspect",
+                ],
+            },
+        ],
+    })
+    assert "admin_operator" in result["created_roles"]
+    linked = set(pool._role_permissions["admin_operator"])
+    assert linked >= {"admin:domain_read", "admin:domain_write", "users:create", "users:list", "roles:inspect"}
 
 
 @pytest.mark.asyncio

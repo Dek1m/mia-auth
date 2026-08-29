@@ -129,21 +129,7 @@ class AuthSchemaRegistry:
                 "DELETE FROM auth.role_permissions WHERE role_id = %s",
                 role_id,
             )
-
-            for perm_name in role_perms:
-                perm_row = self._fetchrow(
-                    "SELECT id FROM auth.permissions WHERE name = %s",
-                    perm_name,
-                )
-                if perm_row is None:
-                    continue
-
-                self._database.execute(
-                    "INSERT INTO auth.role_permissions (role_id, permission_id, updated_at) "
-                    "VALUES (%s, %s, NOW()) "
-                    "ON CONFLICT (role_id, permission_id) DO UPDATE SET updated_at = NOW()",
-                    role_id, perm_row["id"],
-                )
+            self._link_role_permissions(role_id, role_perms)
 
             if existing is None:
                 result["created_roles"].append(name)
@@ -341,6 +327,54 @@ class AuthSchemaRegistry:
                     f"Permission '{name}' requires a description."
                 )
 
+    def _known_permission_names(self, schema_perm_names: set[str]) -> set[str]:
+        """Имена из схемы модуля плюс уже лежащие в auth.permissions."""
+        known = set(schema_perm_names)
+        try:
+            rows = self._database.fetch("SELECT name FROM auth.permissions")
+        except Exception:
+            return known
+        for row in rows:
+            name = row.get("name")
+            if name:
+                known.add(str(name))
+        return known
+
+    def _link_role_permissions(self, role_id: str, role_perms: list[str]) -> None:
+        """Привязать права роли. resource:* раскрывается в существующие строки."""
+        rows = self._database.fetch("SELECT id, name FROM auth.permissions")
+        by_name = {str(row["name"]): str(row["id"]) for row in rows}
+
+        ids: list[str] = []
+        seen: set[str] = set()
+        for perm_name in role_perms:
+            if perm_name == "*:*":
+                pid = by_name.get("*:*")
+                if pid and pid not in seen:
+                    seen.add(pid)
+                    ids.append(pid)
+                continue
+            if perm_name.endswith(":*") and perm_name.count(":") == 1:
+                prefix = perm_name[:-1]
+                for name, pid in by_name.items():
+                    if name.startswith(prefix) and pid not in seen:
+                        seen.add(pid)
+                        ids.append(pid)
+                continue
+            pid = by_name.get(perm_name)
+            if pid and pid not in seen:
+                seen.add(pid)
+                ids.append(pid)
+
+        for pid in ids:
+            self._database.execute(
+                "INSERT INTO auth.role_permissions (role_id, permission_id, updated_at) "
+                "VALUES (%s, %s, NOW()) "
+                "ON CONFLICT (role_id, permission_id) DO UPDATE SET updated_at = NOW()",
+                role_id,
+                pid,
+            )
+
     def _validate_roles(
         self,
         module_name: str,
@@ -348,12 +382,8 @@ class AuthSchemaRegistry:
         permissions: list[dict[str, Any]],
     ) -> None:
         """Валидация ролей до записи."""
-        # Собираем все permissions этой схемы для проверки ссылок
         schema_perm_names = {p["name"] for p in permissions}
-
-        # Также загружаем все существующие permissions из БД для проверки
-        # (но только в синхронном контексте — через pool это уже сделано выше,
-        #  здесь проверяем базовые правила)
+        known_perm_names = self._known_permission_names(schema_perm_names)
 
         for role in roles:
             name = role.get("name", "")
@@ -387,10 +417,10 @@ class AuthSchemaRegistry:
                 action = perm_name.split(":")[1]
 
                 if action == "*":
-                    # resource:* — проверяем что хотя бы одна permission ресурса есть
+                    # resource:* — в схеме модуля или уже в БД (auth users:* из admin_operator)
                     has_resource = any(
                         p.startswith(f"{resource}:")
-                        for p in schema_perm_names
+                        for p in known_perm_names
                     )
                     if not has_resource:
                         raise ValueError(
@@ -398,7 +428,7 @@ class AuthSchemaRegistry:
                             f"no permissions found for resource '{resource}' "
                             f"in module '{module_name}' schema."
                         )
-                elif perm_name not in schema_perm_names:
+                elif perm_name not in known_perm_names:
                     raise ValueError(
                         f"Permission '{perm_name}' in role '{name}' "
                         f"does not exist in module '{module_name}' schema."
