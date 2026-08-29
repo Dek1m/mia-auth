@@ -642,6 +642,17 @@ class AuthRepository:
         )
         return [dict(r) for r in rows]
 
+    async def get_role_groups(self, role_id: str) -> list[dict[str, Any]]:
+        """Группы, которым назначена роль."""
+        rows = self._database.fetch(
+            "SELECT g.id, g.name, g.description, g.is_builtin "
+            "FROM auth.group_roles gr "
+            "JOIN auth.groups g ON g.id = gr.group_id "
+            "WHERE gr.role_id = %s",
+            role_id,
+        )
+        return [dict(row) for row in rows]
+
     # ─────────────────────────────────────────────
     # Связи: пользователи ↔ роли (прямые)
     # ─────────────────────────────────────────────

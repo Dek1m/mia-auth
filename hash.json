@@ -13,7 +13,7 @@
     "password.py": "86c65577ed3f8196ce4bfb281fc6d5988c347529e9fd73eb6180c1d75ba4f5b6",
     "permissions_cache.py": "5218ae809e02e17bf176f685fd12919223b28e10d2fa74e7191b45ef1bd3a87f",
     "provider.py": "620f72d5b12cafb5353efb2249ff2d078211295617dda3d612208ee9b56536ce",
-    "repository.py": "56cdd892fe846b098d9c360aa98e6b46cd9a0fb55b332c9fb8a95a05ea1ef0af",
+    "repository.py": "c98f7158991e02ea0b76a869660447694ab95af30d3a82889555f54967d0d72c",
     "role.py": "efb71d8fc0a9ac74b5c4d1a6859772644c37b6f20a49740d2f8a5e9287b6cd2f",
     "schema.py": "fa61587bc949276f9195ddf428d95cc5e3b844f9ebdfaf61397360ebcb469471",
     "schema_registry.py": "27570a6726bb69ff11290c66864b75acd6dd2721b7135eb1edafbe531b032edd",
@@ -33,5 +33,5 @@
     "user.py": "b0ab4dbb8f0ff2b7e631e36f2763787ff5e6f285e22249ea113fc4b4a2ad64f2",
     "validators.py": "5d43b516f58ae1ff4277c1a2aa40b65e90578906d52c6e4da320854bc548aa66"
   },
-  "manifest_hash": "50f286164a87fa353ce257feb455ab102390ede1d07785503a9b7a665304d028"
+  "manifest_hash": "2bf69d1088c2b2c401b3bf809ac9d5a27b91c08c3644fdd0d9d545abb962d054"
 }
