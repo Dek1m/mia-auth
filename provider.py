@@ -212,6 +212,14 @@ class AuthProvider:
         if self._registry is None:
             return
         self._registry.register_sync("auth", AUTH_CORE_SCHEMA, is_builtin=True)
+        if self._repo is not None:
+            try:
+                self._repo._database.execute(
+                    "ALTER TABLE auth.users "
+                    "ADD COLUMN IF NOT EXISTS ui_windows JSONB NOT NULL DEFAULT jsonb_build_object()",
+                )
+            except Exception as exc:
+                self._warn("ui_windows_alter_failed", error=str(exc))
         self._info("Auth schema registered")
 
     # ─────────────────────────────────────────────
@@ -903,27 +911,66 @@ class AuthProvider:
 
         Поддержка wildcard: *:* и resource:*
         """
-        if self._repo is None or self._cache is None:
+        if self._repo is None:
+            self._warn("permission_denied_no_repo", user_id=user_id, permission=permission)
             return False
 
-        # Проверяем пользователя
         user = await self._repo.get_user(user_id)
         if not user or not user.get("is_active") or user.get("is_disabled"):
+            self._warn(
+                "permission_denied_user",
+                user_id=user_id,
+                permission=permission,
+                found=bool(user),
+            )
             return False
+        if user.get("is_bootstrap_admin"):
+            self._info(
+                "permission_checked",
+                extra={
+                    "user_id": user_id,
+                    "permission": permission,
+                    "allowed": True,
+                    "reason": "bootstrap_admin",
+                },
+            )
+            return True
 
-        # Кеш
         current_version = await self._repo.get_permissions_version(user_id)
-        cached = self._cache.get(user_id)
+        cached = self._cache.get(user_id) if self._cache is not None else None
         if cached is not None:
             cached_version, cached_perms = cached
             if cached_version == current_version:
-                return self._check_permission_set(cached_perms, permission)
+                allowed = self._check_permission_set(cached_perms, permission)
+                self._info(
+                    "permission_checked",
+                    extra={
+                        "user_id": user_id,
+                        "permission": permission,
+                        "allowed": allowed,
+                        "cached": True,
+                        "perm_count": len(cached_perms),
+                    },
+                )
+                return allowed
 
-        # Загружаем из БД
         perms = await self._repo.get_user_effective_permissions(user_id)
-        self._cache.set(user_id, current_version, perms)
-
-        return self._check_permission_set(perms, permission)
+        if self._cache is not None:
+            self._cache.set(user_id, current_version, perms)
+        allowed = self._check_permission_set(perms, permission)
+        payload = {
+            "user_id": user_id,
+            "permission": permission,
+            "allowed": allowed,
+            "cached": False,
+            "perm_count": len(perms),
+            "has_wildcard": "*:*" in perms,
+        }
+        if allowed:
+            self._info("permission_checked", extra=payload)
+        else:
+            self._warn("permission_checked", **payload)
+        return allowed
 
     def _check_permission_set(self, perms: frozenset[str], permission: str) -> bool:
         """Проверить permission в наборе с поддержкой wildcard."""

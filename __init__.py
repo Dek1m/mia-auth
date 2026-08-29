@@ -85,6 +85,10 @@ class AuthModule(ModuleBase):
 
         self._provider = AuthProvider(config=self._config, database=database, log=self._log)
         state.services.register(AuthProvider, self._provider)
+        try:
+            self._provider.initialize_sync()
+        except Exception as exc:
+            self._log.warning("auth_schema_seed_skipped", extra={"error": str(exc)})
 
         self._log.info("AuthModule loaded (Phase 1: PostgreSQL)")
 
