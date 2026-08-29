@@ -143,7 +143,7 @@ class AuthRepository:
 
         patch = json.dumps({window_id: geom})
         row = await self._fetchrow(
-            "UPDATE auth.users SET ui_windows = COALESCE(ui_windows, '{}'::jsonb) || %s::jsonb "
+            "UPDATE auth.users SET ui_windows = COALESCE(ui_windows, jsonb_build_object()) || %s::jsonb "
             "WHERE id = %s RETURNING ui_windows",
             patch,
             user_id,
