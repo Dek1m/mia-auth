@@ -1,7 +1,7 @@
 {
   "version": "2.0.0",
   "files": {
-    "__init__.py": "1aee793204381cde512cd3ed574b4c7c7c94de9e26abd164041fd9b6c248ebb4",
+    "__init__.py": "14be56235a50f1335cf34c556871a85493c7925203099829b6bfc8f5f993ef14",
     "bootstrap.py": "843581e1c949e46a5fb5f2f610e9e2875f935c35423959d01503599fa4c014b8",
     "config.py": "93b45410c031ae1b7d07ddbb6e95f39f4d463579e7c22b7b732a4ed161520efa",
     "domain.py": "3dfb6adb9da76ca0acc6720db3a8d859626550ee21b06bb876b16760332929dd",
@@ -16,7 +16,7 @@
     "repository.py": "c98f7158991e02ea0b76a869660447694ab95af30d3a82889555f54967d0d72c",
     "role.py": "efb71d8fc0a9ac74b5c4d1a6859772644c37b6f20a49740d2f8a5e9287b6cd2f",
     "schema.py": "fa61587bc949276f9195ddf428d95cc5e3b844f9ebdfaf61397360ebcb469471",
-    "schema_registry.py": "27570a6726bb69ff11290c66864b75acd6dd2721b7135eb1edafbe531b032edd",
+    "schema_registry.py": "36d935ce7738907f79900d883a429f408c997c2a660208c76ac4d1b670ec688e",
     "schemas.py": "bd04fe6f6c11f55e21fecc6862c015daee7637b73c2a556df43ef77c5b0b1f6c",
     "tests/__init__.py": "70600204fcb77bbc85a50a0ed1116b1a62a1cc594562589fcbf86ccd3c90af5f",
     "tests/conftest.py": "c2525228201a5cf3cb123ca147cc2895902b8ffbe0d40b0aab67b091d345861a",
@@ -29,9 +29,9 @@
     "tests/test_phase1_logic.py": "fa6c691d9c1b3ff5053c1bdd52627ef42d259b9482dc93c360f7cab7fd7adc01",
     "tests/test_provider.py": "5abb81f7b0f86a236ed355773656efb9e650454df98c72e3ce03e75106872a5b",
     "tests/test_repository.py": "641dde70adb8f951fc48657ed2b7cc2c45672b5b95b4edbee6b83fd4a8abd856",
-    "tests/test_schema_registry.py": "9561fbb03ee16314e9f362a1a8248fc06bdab1669759a03bec4ca103d81ed3d4",
+    "tests/test_schema_registry.py": "4fce170c3dc1c1202de7f69f9eab1a0ec6f61157066f5d3f78195b48eb0a7f0a",
     "user.py": "b0ab4dbb8f0ff2b7e631e36f2763787ff5e6f285e22249ea113fc4b4a2ad64f2",
     "validators.py": "5d43b516f58ae1ff4277c1a2aa40b65e90578906d52c6e4da320854bc548aa66"
   },
-  "manifest_hash": "2bf69d1088c2b2c401b3bf809ac9d5a27b91c08c3644fdd0d9d545abb962d054"
+  "manifest_hash": "d4241f6d2ac84800a8d3a63ccb58a44225650b02a3b8a9b86855fbd9acb8deb2"
 }

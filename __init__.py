@@ -76,6 +76,10 @@ class AuthModule(ModuleBase):
                 "login": 10.0,
                 "create_user": 5.0,
             },
+            load_on="all",
+            is_system=True,
+            display_name="Auth",
+            is_example=False,
         )
 
     def __init__(self, config: AuthConfig | None = None) -> None:
