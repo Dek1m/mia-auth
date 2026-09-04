@@ -7,6 +7,9 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from typing import ClassVar
+
+from modules_system.pref_spec import PrefField
 
 __all__ = ["AuthConfig"]
 
@@ -45,6 +48,73 @@ class AuthConfig:
 
     # Повтор того же refresh-hash в окне → та же пара, не revoke family
     refresh_grace_seconds: int = 8
+
+    SETTINGS: ClassVar[tuple[PrefField, ...]] = (
+        PrefField(
+            "jwt_access_expiration_minutes", "Access token TTL (min)",
+            "Срок жизни access-токена. Короткий TTL снижает окно кражи cookie.",
+            "int", 15, "Tokens", env="AUTH_JWT_ACCESS_EXPIRATION_MINUTES",
+            minimum=1, maximum=1440,
+        ),
+        PrefField(
+            "jwt_refresh_expiration_days", "Refresh token TTL (days)",
+            "Срок жизни refresh-токена и cookie сессии.",
+            "int", 30, "Tokens", env="AUTH_JWT_REFRESH_EXPIRATION_DAYS",
+            minimum=1, maximum=365,
+        ),
+        PrefField(
+            "password_min_length", "Min password length",
+            "Минимальная длина пароля при создании и смене.",
+            "int", 8, "Security", env="AUTH_PASSWORD_MIN_LENGTH",
+            minimum=4, maximum=128,
+        ),
+        PrefField(
+            "password_require_uppercase", "Require uppercase",
+            "Пароль обязан содержать заглавную букву.",
+            "bool", True, "Security", env="AUTH_PASSWORD_REQUIRE_UPPERCASE",
+        ),
+        PrefField(
+            "password_require_digit", "Require digit",
+            "Пароль обязан содержать цифру.",
+            "bool", True, "Security", env="AUTH_PASSWORD_REQUIRE_DIGIT",
+        ),
+        PrefField(
+            "password_history_size", "Password history",
+            "Сколько предыдущих паролей нельзя повторять.",
+            "int", 10, "Security", env="AUTH_PASSWORD_HISTORY_SIZE",
+            minimum=0, maximum=50,
+        ),
+        PrefField(
+            "session_max_age_hours", "Session max age (hours)",
+            "Максимальный возраст сессии до принудительного logout.",
+            "int", 24 * 7, "Tokens", env="AUTH_SESSION_MAX_AGE_HOURS",
+            minimum=1, maximum=8760,
+        ),
+        PrefField(
+            "login_attempts_limit", "Login attempts limit",
+            "Неудачных попыток до временной блокировки.",
+            "int", 5, "Security", env="AUTH_LOGIN_ATTEMPTS_LIMIT",
+            minimum=1, maximum=50,
+        ),
+        PrefField(
+            "login_block_minutes", "Login block (min)",
+            "На сколько минут блокировать после лимита попыток.",
+            "int", 15, "Security", env="AUTH_LOGIN_BLOCK_MINUTES",
+            minimum=1, maximum=1440,
+        ),
+        PrefField(
+            "perms_cache_ttl", "Permissions cache TTL (sec)",
+            "TTL кеша прав. Меньше — свежее права, больше нагрузка.",
+            "int", 300, "Limits", env="AUTH_PERMS_CACHE_TTL",
+            minimum=0, maximum=86400,
+        ),
+        PrefField(
+            "refresh_grace_seconds", "Refresh grace (sec)",
+            "Окно повторного того же refresh-hash без revoke family.",
+            "int", 8, "Tokens", env="AUTH_REFRESH_GRACE_SECONDS",
+            minimum=0, maximum=60,
+        ),
+    )
 
     # БД (для прямого подключения, если пул не передан извне)
     db_host: str = "localhost"
