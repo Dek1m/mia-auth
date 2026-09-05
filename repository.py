@@ -395,13 +395,15 @@ class AuthRepository:
 
     async def prune_password_history(self, user_id: str, keep: int = 10) -> None:
         """Оставить только последние N записей истории."""
+        # Три %s — user_id дважды (outer + subquery) и keep. Раньше передавалось
+        # (user_id, keep) → psycopg падал на числе параметров, prune не работал.
         self._database.execute(
             "DELETE FROM auth.password_history "
             "WHERE user_id = %s AND id NOT IN ("
             "  SELECT id FROM auth.password_history "
             "  WHERE user_id = %s ORDER BY created_at DESC LIMIT %s"
             ")",
-            user_id, keep,
+            user_id, user_id, keep,
         )
 
     # ─────────────────────────────────────────────
