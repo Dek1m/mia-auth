@@ -15,6 +15,7 @@ import pytest
 
 from modules.auth.provider import (
     AuthProvider,
+    BootstrapDoneError,
     AuthError,
     InvalidCredentialsError,
     AccountLockedError,
@@ -603,11 +604,15 @@ class TestBootstrap:
             assert await provider.needs_bootstrap() is False
 
     async def test_bootstrap_second_time_raises(self, provider: AuthProvider, mock_pool):
-        """Повторный bootstrap → ValueError."""
+        """Повторный bootstrap → BootstrapDoneError (code BOOTSTRAP_DONE → 409).
+
+        ValueError из AuthBootstrap.bootstrap провайдер заворачивает в
+        BootstrapDoneError — наружу ValueError больше не выходит.
+        """
         await provider.initialize()
         await provider.bootstrap("admin", "SecurePass123")
         with patch.object(provider._repo, "get_active_admin_count", return_value=1):
-            with pytest.raises(ValueError, match="already completed"):
+            with pytest.raises(BootstrapDoneError, match="already completed"):
                 await provider.bootstrap("admin2", "SecurePass123")
 
     async def test_bootstrap_without_pool_raises(self, auth_config):
@@ -865,21 +870,37 @@ class TestAuthDecorator:
         assert not hasattr(AuthProvider.create_user, "_api_meta")
         assert hasattr(AuthProvider.create_user, "_task_type")
 
-    def test_collect_from_module_exports_exactly_five_api_methods(
+    def test_collect_from_module_exports_api_surface(
         self, provider: AuthProvider,
     ) -> None:
+        """API-поверхность auth — точный набор (контракт RPC-реестра).
+
+        Был «exactly five»: auth вырос (profile/группы/окна/аватары),
+        набор обновлён до фактического; проверка точная, не «>=».
+        """
         from modules.apiproxy.registry import MethodRegistry
 
         reg = MethodRegistry()
         count = reg.collect_from_module(provider, "auth")
         names = {m.name for m in reg.list_methods("auth")}
-        assert count == 5
+        assert count == 16
         assert names == {
             "needs_bootstrap",
             "bootstrap",
             "login",
             "refresh_token",
             "logout",
+            "get_me",
+            "update_me",
+            "change_username",
+            "set_avatar",
+            "clear_avatar",
+            "get_my_groups",
+            "list_groups",
+            "add_user_to_group",
+            "remove_user_from_group",
+            "get_windows",
+            "save_window",
         }
 
 

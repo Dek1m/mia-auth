@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 from modules.auth.provider import (
     AuthProvider,
+    BootstrapDoneError,
     InvalidCredentialsError,
     AccountLockedError,
     AccountDisabledError,
@@ -501,11 +502,11 @@ class TestBootstrapFlow:
     async def test_bootstrap_second_time_raises(
         self, provider: AuthProvider, mock_pool,
     ):
-        """Повторный bootstrap → ValueError."""
+        """Повторный bootstrap → BootstrapDoneError (code BOOTSTRAP_DONE → 409)."""
         await provider.initialize()
         await provider.bootstrap("admin", "SecurePass123")
 
-        with pytest.raises(ValueError, match="already completed"):
+        with pytest.raises(BootstrapDoneError, match="already completed"):
             await provider.bootstrap("admin2", "SecurePass123")
 
     async def test_bootstrap_creates_system_admin(

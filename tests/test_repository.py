@@ -207,13 +207,13 @@ class TestRoles:
 
         await repo.assign_role_to_user(user["id"], role["id"])
         # Проверяем через прямой SELECT (JOIN не поддерживается mock)
-        rows = await mock_pool.fetch(
+        rows = mock_pool.fetch(
             "SELECT * FROM auth.user_roles WHERE user_id = $1", user["id"],
         )
         assert len(rows) == 1
 
         await repo.remove_role_from_user(user["id"], role["id"])
-        rows = await mock_pool.fetch(
+        rows = mock_pool.fetch(
             "SELECT * FROM auth.user_roles WHERE user_id = $1", user["id"],
         )
         assert len(rows) == 0
@@ -223,13 +223,13 @@ class TestRoles:
         role = await repo.create_role("admin")
 
         await repo.assign_role_to_group(group["id"], role["id"])
-        rows = await mock_pool.fetch(
+        rows = mock_pool.fetch(
             "SELECT * FROM auth.group_roles WHERE group_id = $1", group["id"],
         )
         assert len(rows) == 1
 
         await repo.remove_role_from_group(group["id"], role["id"])
-        rows = await mock_pool.fetch(
+        rows = mock_pool.fetch(
             "SELECT * FROM auth.group_roles WHERE group_id = $1", group["id"],
         )
         assert len(rows) == 0

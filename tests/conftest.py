@@ -15,6 +15,16 @@ import pytest
 # ── Mock Pool ────────────────────────────────────────────
 
 
+def _sql_like(value: str, pattern: str) -> bool:
+    """SQL ILIKE: % — любая последовательность, _ — один символ."""
+    parts = re.split(r"(%|_)", pattern)
+    regex = "".join(
+        ".*" if part == "%" else "." if part == "_" else re.escape(part)
+        for part in parts
+    )
+    return re.fullmatch(regex, value, re.IGNORECASE) is not None
+
+
 class MockRow:
     """Мок строки результата запроса."""
 
@@ -120,6 +130,8 @@ class MockPool:
             return []
         if " union " in q:
             return []
+        if " join " in q:
+            return self._fetch_joined(q, params)
         table = self._find_table(query)
         if table is None:
             return []
@@ -127,16 +139,123 @@ class MockPool:
         where_idx = q.find(" where ")
         if where_idx >= 0:
             where_clause = q[where_idx + 7:]
-            return [
-                MockRow(row) for row in self._data[table].values()
+            rows = [
+                row for row in self._data[table].values()
                 if self._match_where(row, where_clause, params)
             ]
-        return [MockRow(row) for row in self._data[table].values()]
+        else:
+            rows = list(self._data[table].values())
+        if "count(*)" in q:
+            return [MockRow({"count": len(rows)})]
+        rows = self._apply_pagination(q, rows, params)
+        return [MockRow(row) for row in rows]
+
+    _JOIN_RE = re.compile(
+        r"join\s+([\w.]+)(?:\s+(?:as\s+)?(\w+))?\s+on\s+(\w+)\.(\w+)\s*=\s*(\w+)\.(\w+)"
+    )
+
+    def _fetch_joined(self, q: str, params: tuple) -> list[MockRow]:
+        """Эмуляция equi-JOIN: FROM t a JOIN t2 b ON a.x = b.y [WHERE ...].
+
+        Достаточно для COUNT-запросов репозитория (get_active_admin_count).
+        Строка представляется как {(alias, column): value}.
+        """
+        base = re.search(r"from\s+([\w.]+)(?:\s+(?:as\s+)?(\w+))?", q)
+        if base is None:
+            return []
+        base_alias = base.group(2) or base.group(1)
+        rows: list[dict[tuple[str, str], Any]] = [
+            {(base_alias, col): value for col, value in row.items()}
+            for row in self._data.get(base.group(1), {}).values()
+        ]
+        for join in self._JOIN_RE.finditer(q):
+            table, alias, left_alias, left_col, right_alias, right_col = join.groups()
+            alias = alias or table
+            merged_rows = []
+            for existing in rows:
+                for jrow in self._data.get(table, {}).values():
+                    merged = dict(existing)
+                    merged.update({(alias, col): value for col, value in jrow.items()})
+                    if merged.get((left_alias, left_col)) == merged.get((right_alias, right_col)):
+                        merged_rows.append(merged)
+            rows = merged_rows
+        where_idx = q.find(" where ")
+        if where_idx >= 0:
+            rows = [r for r in rows if self._match_aliased(r, q[where_idx + 7:], params)]
+        if "count(*)" in q:
+            return [MockRow({"count": len(rows)})]
+        return [MockRow({col: v for (_, col), v in row.items()}) for row in rows]
+
+    def _match_aliased(
+        self, row: dict[tuple[str, str], Any], where_clause: str, params: tuple,
+    ) -> bool:
+        """WHERE по alias.column = literal/%s (true/false/null/'str')."""
+        param_idx = 0
+        for part in where_clause.split(" and "):
+            match = re.match(r"\s*(\w+)\.(\w+)\s*=\s*(.+?)\s*$", part.strip())
+            if match is None:
+                continue
+            alias, col, raw = match.groups()
+            if raw.startswith("%s") or raw.startswith("$"):
+                expected: Any = params[param_idx] if param_idx < len(params) else None
+                param_idx += 1
+            elif raw.startswith("'"):
+                expected = raw.strip("'")
+            elif raw.lower() == "true":
+                expected = True
+            elif raw.lower() == "false":
+                expected = False
+            elif raw.lower() == "null":
+                expected = None
+            else:
+                expected = raw
+            if row.get((alias, col)) != expected:
+                return False
+        return True
+
+    def _apply_pagination(
+        self, q: str, rows: list[dict[str, Any]], params: tuple,
+    ) -> list[dict[str, Any]]:
+        """LIMIT $N OFFSET $M (или литералы) — как в list_users."""
+        limit_m = re.search(r"limit\s+(?:\$(\d+)|(\d+))", q)
+        offset_m = re.search(r"offset\s+(?:\$(\d+)|(\d+))", q)
+        if limit_m is None and offset_m is None:
+            return rows
+
+        def _value(match: re.Match) -> int:
+            if match.group(1):
+                idx = int(match.group(1)) - 1
+                return int(params[idx]) if 0 <= idx < len(params) else 0
+            return int(match.group(2))
+
+        offset = _value(offset_m) if offset_m else 0
+        if limit_m:
+            return rows[offset:offset + _value(limit_m)]
+        return rows[offset:]
 
     def _match_where(self, row: dict, where_clause: str, params: tuple) -> bool:
         """Проверяет row по WHERE clause."""
+        if " ilike " in where_clause:
+            return self._match_ilike(row, where_clause, params)
         conditions = self._extract_conditions_from_where(where_clause, params)
         return self._match(row, conditions)
+
+    def _match_ilike(self, row: dict, where_clause: str, params: tuple) -> bool:
+        """ILIKE-поиск: «col ILIKE %s OR col2 ILIKE %s ...» (list_users search)."""
+        cols = re.findall(r"(\w+)\s+ilike", where_clause)
+        patterns = [str(p) for p in params if isinstance(p, str)]
+        if not cols or not patterns:
+            return False
+
+        def hit(col: str) -> bool:
+            value = row.get(col)
+            if not isinstance(value, str):
+                return False
+            return any(_sql_like(value, pattern) for pattern in patterns)
+
+        if " or " in where_clause:
+            return any(hit(col) for col in cols)
+        return all(hit(col) for col in cols)
     
     def _extract_conditions_from_where(self, where_clause: str, params: tuple) -> list:
         """Извлечь условия из WHERE clause."""
@@ -406,6 +525,10 @@ class MockPool:
         if not table or table not in self._data:
             return "DELETE 0"
 
+        q = query.lower()
+        if "not in" in q and "select" in q:
+            return self._do_delete_not_in(table, q, params)
+
         conditions = self._extract_conditions(query, params)
         to_delete = [
             row_id for row_id, row in self._data[table].items()
@@ -415,6 +538,45 @@ class MockPool:
         for row_id in to_delete:
             del self._data[table][row_id]
 
+        return f"DELETE {len(to_delete)}"
+
+    def _do_delete_not_in(self, table: str, q: str, params: tuple) -> str:
+        """DELETE ... WHERE cond AND id NOT IN (SELECT id ... ORDER BY col DESC LIMIT n).
+
+        Порядок вставки dict ≈ created_at: DESC — последние добавленные впереди.
+        """
+        outer, _, rest = q.partition(" and id not in (")
+        outer_where = outer.split(" where ", 1)[1] if " where " in outer else ""
+        sub = rest.split(")", 1)[0]
+        sub_where = ""
+        if " where " in sub:
+            sub_where = sub.split(" where ", 1)[1].split(" order by", 1)[0]
+        keep = len(self._data[table])
+        limit_m = re.search(r"limit\s+(%s|\$(\d+)|(\d+))", sub)
+        if limit_m:
+            if limit_m.group(1) == "%s":
+                keep = int(params[-1])
+            else:
+                keep = int(limit_m.group(2) or limit_m.group(3))
+        all_rows = list(self._data[table].values())
+        n_outer = outer_where.count("%s")
+        sub_params = params[n_outer:n_outer + sub_where.count("%s")]
+        sub_rows = (
+            [r for r in all_rows if self._match_where(r, sub_where, sub_params)]
+            if sub_where else all_rows
+        )
+        if " desc" in sub:
+            sub_rows = list(reversed(sub_rows))
+        keep_ids = {str(r.get("id")) for r in sub_rows[:keep]}
+        outer_conditions = self._extract_conditions_from_where(
+            outer_where, params[:n_outer],
+        )
+        to_delete = [
+            row_id for row_id, row in self._data[table].items()
+            if self._match(row, outer_conditions) and str(row_id) not in keep_ids
+        ]
+        for row_id in to_delete:
+            del self._data[table][row_id]
         return f"DELETE {len(to_delete)}"
 
     # Утилиты для тестов
