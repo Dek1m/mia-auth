@@ -299,7 +299,7 @@ async def test_idempotent_roles_not_duplicated(
 async def test_duplicate_permission_across_modules_updates(
     registry: AuthSchemaRegistry, pool: RegistryMockPool
 ):
-    """ON CONFLICT: повторная регистрация同一permission обновляет source_module."""
+    """ON CONFLICT: повторная регистрация одного permission обновляет source_module."""
     schema1 = {"permissions": [{"name": "module_a:perm", "description": "v1"}]}
     await registry.register("module_a", schema1)
 

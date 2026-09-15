@@ -14,11 +14,19 @@ class FolderRepository(Protocol):
     """Контракт дерева OU и привязок user/group. Impl — admin.folder_repository."""
 
     async def list_ous(self) -> list[dict[str, Any]]:
-        """Все OU: id, parent_id, name, is_builtin, is_system, kind, sort_order."""
+        """Все OU: id, parent_id, name, is_builtin, is_system, kind, sort_order.
+
+        Для kind='domain' добавляет domain_id / domain_display_name
+        (LEFT JOIN auth.domains ON root_ou_id) — additive к контракту.
+        """
         ...
 
     async def get_ou(self, ou_id: str) -> dict[str, Any] | None:
         """Одна OU или None."""
+        ...
+
+    async def get_root_ou(self) -> dict[str, Any] | None:
+        """Верхний Root (kind='root', parent NULL); None — дерева нет."""
         ...
 
     async def list_user_bindings(self) -> list[dict[str, Any]]:
@@ -57,6 +65,24 @@ class FolderRepository(Protocol):
 
     async def get_system_ou_by_kind(self, kind: str) -> dict[str, Any] | None:
         """Builtin bin: users_bin / groups_bin."""
+        ...
+
+    async def create_domain_subtree(
+        self,
+        parent_id: str,
+        name: str,
+        display_name: str | None = None,
+    ) -> dict[str, str]:
+        """OU-поддерево нового домена одной транзакцией.
+
+        domain(kind='domain') → Built-in → Users/Groups bins.
+        Возвращает {domain_ou_id, builtin_ou_id, users_bin_id, groups_bin_id}.
+        """
+        ...
+
+    async def resolve_domain_ou(self, ou_id: str) -> dict[str, Any] | None:
+        """Ближайший предок (включая себя) с kind='domain'; None — дошли
+        до Root без домена."""
         ...
 
     async def count_children(self, ou_id: str) -> int:

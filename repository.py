@@ -69,6 +69,8 @@ class AuthRepository:
     def __init__(self, database: Any, log: Any | None = None) -> None:
         self._database = database
         self._log = log
+        # Builtin-домен не удаётся удалить (kind-инвариант) — кеш живёт вечно.
+        self._builtin_domain_id: str | None = None
 
     async def _update_filtered(
         self,
@@ -111,6 +113,16 @@ class AuthRepository:
     # Пользователи
     # ─────────────────────────────────────────────
 
+    async def get_builtin_domain_id(self) -> str | None:
+        """UUID builtin-домена ('argenta'). Кеш — домен несменяем."""
+        if self._builtin_domain_id is None:
+            row = await self._fetchrow(
+                "SELECT id FROM auth.domains WHERE kind = 'builtin' "
+                "ORDER BY created_at, id LIMIT 1",
+            )
+            self._builtin_domain_id = str(row["id"]) if row else None
+        return self._builtin_domain_id
+
     async def create_user(
         self,
         username: str,
@@ -119,14 +131,22 @@ class AuthRepository:
         first_name: str | None = None,
         last_name: str | None = None,
         description: str | None = None,
+        domain_id: str | None = None,
     ) -> dict[str, Any]:
-        """Создать пользователя. Возвращает запись."""
+        """Создать пользователя. Возвращает запись.
+
+        domain_id обязателен (ddl/009 SET NOT NULL): без явного значения
+        пользователь попадает в builtin-домен 'argenta'.
+        """
+        # Резолв отдельным SELECT, не подзапросом в INSERT — mock-слой тестов
+        # не парсит подзапросы, а кеш делает повторные создания бесплатными.
+        resolved = domain_id or await self.get_builtin_domain_id()
         return await self._fetchrow(
             "INSERT INTO auth.users "
-            "(username, password_hash, email, first_name, last_name, description) "
-            "VALUES (%s, %s, %s, %s, %s, %s) "
+            "(username, password_hash, email, first_name, last_name, description, domain_id) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s) "
             "RETURNING *",
-            username, password_hash, email, first_name, last_name, description,
+            username, password_hash, email, first_name, last_name, description, resolved,
         ) or {}
 
     async def get_user(self, user_id: str) -> dict[str, Any] | None:
@@ -411,13 +431,30 @@ class AuthRepository:
     # ─────────────────────────────────────────────
 
     async def create_group(
-        self, name: str, description: str | None = None, is_builtin: bool = False,
+        self,
+        name: str,
+        description: str | None = None,
+        is_builtin: bool = False,
+        domain_id: str | None = None,
+        scope: str | None = None,
+        owner_id: str | None = None,
+        link_id: str | None = None,
     ) -> dict[str, Any]:
-        """Создать группу."""
+        """Создать группу с явным scope-тройником (ddl/009 CHECK shape).
+
+        Дефолты обратной совместимости (как backfill 009): builtin →
+        scope='system'; остальные → scope='domain' в builtin-домен 'argenta'.
+        Доменные группы тенанта передают domain_id; федеративные — link_id.
+        """
+        if scope is None:
+            scope = "system" if is_builtin else "domain"
+        if domain_id is None and scope == "domain":
+            domain_id = await self.get_builtin_domain_id()
         return await self._fetchrow(
-            "INSERT INTO auth.groups (name, description, is_builtin) "
-            "VALUES (%s, %s, %s) RETURNING *",
-            name, description, is_builtin,
+            "INSERT INTO auth.groups "
+            "(name, description, is_builtin, scope, domain_id, owner_id, link_id) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING *",
+            name, description, is_builtin, scope, domain_id, owner_id, link_id,
         ) or {}
 
     async def get_group(self, group_id: str) -> dict[str, Any] | None:
@@ -994,3 +1031,211 @@ class AuthRepository:
         return await self._fetchrow(
             "SELECT id FROM auth.groups WHERE name = %s", name,
         )
+
+    # ─────────────────────────────────────────────
+    # Домены (scope-модель, Часть 2)
+    # ─────────────────────────────────────────────
+
+    async def create_domain(
+        self,
+        name: str,
+        kind: str = "user",
+        owner_id: str | None = None,
+        display_name: str | None = None,
+        identity_kind: str = "local",
+        auth_config: dict[str, Any] | None = None,
+        ad_config: dict[str, Any] | None = None,
+        root_ou_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Создать домен-тенант. Секреты в конфиги не пишем (§10.2).
+
+        root_ou_id — OU-узел домена в system.ou (DDL-008 FK).
+        """
+        import json
+
+        return await self._fetchrow(
+            "INSERT INTO auth.domains "
+            "(name, display_name, kind, owner_id, identity_kind, auth_config, "
+            "ad_config, root_ou_id) "
+            "VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s) "
+            "RETURNING *",
+            name, display_name, kind, owner_id, identity_kind,
+            json.dumps(auth_config or {}), json.dumps(ad_config or {}), root_ou_id,
+        ) or {}
+
+    async def get_domain(self, domain_id: str) -> dict[str, Any] | None:
+        """Домен по ID."""
+        return await self._fetchrow(
+            "SELECT * FROM auth.domains WHERE id = %s", domain_id,
+        )
+
+    async def get_domain_by_root_ou(self, root_ou_id: str) -> dict[str, Any] | None:
+        """Домен по корневому OU (обратная сторона root_ou_id)."""
+        return await self._fetchrow(
+            "SELECT * FROM auth.domains WHERE root_ou_id = %s", root_ou_id,
+        )
+
+    async def get_domain_by_name(self, name: str) -> dict[str, Any] | None:
+        """Домен по слагу."""
+        return await self._fetchrow(
+            "SELECT * FROM auth.domains WHERE name = %s", name,
+        )
+
+    async def list_domains(self, kind: str | None = None) -> list[dict[str, Any]]:
+        """Все домены; kind-фильтр опционален."""
+        if kind:
+            rows = self._database.fetch(
+                "SELECT * FROM auth.domains WHERE kind = %s ORDER BY created_at",
+                kind,
+            )
+        else:
+            rows = self._database.fetch(
+                "SELECT * FROM auth.domains ORDER BY created_at",
+            )
+        return [dict(row) for row in rows]
+
+    # Колонки, которые Tenant.update/set_identity_kind вправе менять
+    _DOMAIN_UPDATE_FIELDS = frozenset({
+        "name", "display_name", "identity_kind", "auth_config", "ad_config",
+    })
+
+    async def update_domain(
+        self, domain_id: str, data: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """UPDATE домена по whitelist; kind/owner — только через DDL-инварианты."""
+        import json
+
+        filtered = {
+            key: (json.dumps(value) if key in ("auth_config", "ad_config") else value)
+            for key, value in data.items()
+            if key in self._DOMAIN_UPDATE_FIELDS
+        }
+        if not filtered:
+            return await self.get_domain(domain_id)
+        assignments = ", ".join(
+            f"{field} = %s::jsonb" if field in ("auth_config", "ad_config") else f"{field} = %s"
+            for field in filtered
+        )
+        values: list[Any] = list(filtered.values())
+        values.append(domain_id)
+        return await self._fetchrow(
+            f"UPDATE auth.domains SET {assignments}, updated_at = NOW() "
+            "WHERE id = %s RETURNING *",
+            *values,
+        )
+
+    async def set_domain_status(self, domain_id: str, status: str) -> None:
+        """Сменить статус домена (active/suspended)."""
+        self._database.execute(
+            "UPDATE auth.domains SET status = %s, updated_at = NOW() WHERE id = %s",
+            status, domain_id,
+        )
+
+    # ─────────────────────────────────────────────
+    # Федеративные линки (handshake pending → active → revoked)
+    # ─────────────────────────────────────────────
+
+    async def create_domain_link(
+        self,
+        domain_a_id: str,
+        domain_b_id: str,
+        created_by: str | None = None,
+    ) -> dict[str, Any]:
+        """Создать линк в статусе 'pending'.
+
+        Канонический порядок (a < b) — требование CHECK ddl/008:
+        сортируем UUID сами, дубль пары отсеет uq_domain_links_pair.
+        """
+        low, high = sorted((domain_a_id, domain_b_id))
+        return await self._fetchrow(
+            "INSERT INTO auth.domain_links (domain_a_id, domain_b_id, created_by) "
+            "VALUES (%s, %s, %s) RETURNING *",
+            low, high, created_by,
+        ) or {}
+
+    async def list_links_for_domain(self, domain_id: str) -> list[dict[str, Any]]:
+        """Линки домена (обе стороны — canon-порядок не задаёт роль)."""
+        rows = self._database.fetch(
+            "SELECT * FROM auth.domain_links "
+            "WHERE domain_a_id = %s OR domain_b_id = %s ORDER BY created_at DESC",
+            domain_id, domain_id,
+        )
+        return [dict(row) for row in rows]
+
+    async def set_link_status(self, link_id: str, status: str) -> dict[str, Any] | None:
+        """Handshake-переход: pending→active, *→revoked. Revoked не воскресает.
+
+        None — линка нет; строка с прежним status — переход отклонён.
+        """
+        current = await self._fetchrow(
+            "SELECT * FROM auth.domain_links WHERE id = %s", link_id,
+        )
+        if not current:
+            return None
+        if current.get("status") == "revoked" and status != "revoked":
+            return current
+        return await self._fetchrow(
+            "UPDATE auth.domain_links SET status = %s WHERE id = %s RETURNING *",
+            status, link_id,
+        )
+
+    # ─────────────────────────────────────────────
+    # Доменный скоупинг прав и видимости
+    # ─────────────────────────────────────────────
+
+    async def check_permission_in_domain(
+        self, user_id: str, permission: str, domain_id: str,
+    ) -> bool:
+        """Право через роль, назначенную группе ЭТОГО домена (или федеративной).
+
+        Прямые user_roles не скоупятся доменом (решение Эны): только
+        группы scope='domain' домена и группы активных линков домена.
+        Wildcard: '*:*' и 'resource:*'.
+        """
+        resource = permission.split(":", 1)[0]
+        row = await self._fetchrow(
+            "SELECT EXISTS("
+            "  SELECT 1 FROM auth.user_group_membership ugm "
+            "  JOIN auth.groups g ON g.id = ugm.group_id "
+            "  JOIN auth.group_roles gr ON gr.group_id = g.id "
+            "  JOIN auth.role_permissions rp ON rp.role_id = gr.role_id "
+            "  JOIN auth.permissions p ON p.id = rp.permission_id "
+            "  WHERE ugm.user_id = %s "
+            "    AND (p.name = %s OR p.name = '*:*' OR p.name = %s) "
+            "    AND ("
+            "      g.domain_id = %s "
+            "      OR g.link_id IN ("
+            "        SELECT id FROM auth.domain_links "
+            "        WHERE status = 'active' AND (domain_a_id = %s OR domain_b_id = %s)"
+            "      )"
+            "    )"
+            ")",
+            user_id, permission, f"{resource}:*", domain_id, domain_id, domain_id,
+        )
+        return bool(row.get("exists")) if row else False
+
+    async def get_user_visible_domains(self, user_id: str) -> list[str]:
+        """Домены юзера: свой + партнёры активных линков (федерация).
+
+        Предикат видимости llm-каталога: scope='system' OR
+        (scope='domain' AND domain_id IN visible_domains).
+        """
+        rows = self._database.fetch(
+            "SELECT u.domain_id AS own, other.domain_id AS peer FROM auth.users u "
+            "LEFT JOIN LATERAL ("
+            "  SELECT CASE WHEN l.domain_a_id = u.domain_id THEN l.domain_b_id "
+            "              ELSE l.domain_a_id END AS domain_id "
+            "  FROM auth.domain_links l "
+            "  WHERE l.status = 'active' "
+            "    AND (l.domain_a_id = u.domain_id OR l.domain_b_id = u.domain_id)"
+            ") other ON TRUE "
+            "WHERE u.id = %s",
+            user_id,
+        )
+        found: set[str] = set()
+        for row in rows:
+            for key in ("own", "peer"):
+                value = row.get(key)
+                if value:
+                    found.add(str(value))
+        return list(found)

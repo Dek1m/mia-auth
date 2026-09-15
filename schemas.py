@@ -1,4 +1,4 @@
-"""Auth DB Schema — 12 таблиц модуля авторизации.
+"""Auth DB Schema — 14 таблиц модуля авторизации.
 
 Формат Schema-first: dict с ключом "columns".
 Колонки описаны строками SQL-типов и ограничений.
@@ -6,6 +6,14 @@
 Ключ "auto_id": False отключает автодобавление id UUID PK.
 Ключ "primary_key": [...] задаёт составной PK.
 Профиль albedo (ADR-001): отдельные колонки, не custom_fields JSONB.
+
+Scope-модель (Часть 2): domains/domain_links + scope-колонки users/groups.
+Порядок таблиц = порядок CREATE на fresh-инсталле: users раньше domains
+(owner_id FK), domains/domain_links раньше groups (FK тройника).
+FK users.domain_id → domains невозможен inline (цикл: domains.owner_id →
+users) — его добавляет ddl/009_scope_columns.sql после создания обеих таблиц.
+То же fk_domains_root_ou → system.ou: system применяется позже auth,
+FK докатывает system/ddl/007_backfill_domain_root.sql.
 """
 from __future__ import annotations
 
@@ -40,6 +48,27 @@ DB_SCHEMA: dict[str, dict[str, Any]] = {
             "chip_display_mode": "VARCHAR(16) NOT NULL DEFAULT 'nickname'",
             "is_bootstrap_admin": "BOOLEAN NOT NULL DEFAULT FALSE",
             "ui_windows": "JSONB NOT NULL DEFAULT '{}'::jsonb",
+            # Домен пользователя. NOT NULL доводит ddl/009 (backfill builtin-домена);
+            # здесь без FK: domains.owner_id ссылается обратно на users (цикл).
+            "domain_id": "UUID",
+            "created_at": "TIMESTAMPTZ DEFAULT NOW()",
+            "updated_at": "TIMESTAMPTZ DEFAULT NOW()",
+        },
+    },
+    # ── Домены (scope-модель, Часть 2) ────────────────────────
+    "domains": {
+        "columns": {
+            "id": "UUID PRIMARY KEY DEFAULT gen_random_uuid()",
+            "name": "TEXT NOT NULL UNIQUE",
+            "display_name": "TEXT",
+            "kind": "TEXT NOT NULL",
+            "owner_id": "UUID REFERENCES auth.users(id) ON DELETE RESTRICT",
+            # FK на system.ou — в system/ddl/007 (system грузится позже auth)
+            "root_ou_id": "UUID",
+            "identity_kind": "TEXT NOT NULL DEFAULT 'local'",
+            "auth_config": "JSONB NOT NULL DEFAULT '{}'::jsonb",
+            "ad_config": "JSONB NOT NULL DEFAULT '{}'::jsonb",
+            "status": "TEXT NOT NULL DEFAULT 'active'",
             "created_at": "TIMESTAMPTZ DEFAULT NOW()",
             "updated_at": "TIMESTAMPTZ DEFAULT NOW()",
         },
@@ -54,6 +83,17 @@ DB_SCHEMA: dict[str, dict[str, Any]] = {
             "updated_at": "TIMESTAMPTZ DEFAULT NOW()",
         },
     },
+    # ── Федеративные линки доменов (scope-модель, Часть 2) ───
+    "domain_links": {
+        "columns": {
+            "id": "UUID PRIMARY KEY DEFAULT gen_random_uuid()",
+            "domain_a_id": "UUID NOT NULL REFERENCES auth.domains(id) ON DELETE CASCADE",
+            "domain_b_id": "UUID NOT NULL REFERENCES auth.domains(id) ON DELETE CASCADE",
+            "status": "TEXT NOT NULL DEFAULT 'pending'",
+            "created_by": "UUID REFERENCES auth.users(id) ON DELETE SET NULL",
+            "created_at": "TIMESTAMPTZ DEFAULT NOW()",
+        },
+    },
     # ── Группы ────────────────────────────────────────────────
     "groups": {
         "columns": {
@@ -61,6 +101,11 @@ DB_SCHEMA: dict[str, dict[str, Any]] = {
             "name": "VARCHAR(255) UNIQUE NOT NULL",
             "description": "TEXT",
             "is_builtin": "BOOLEAN DEFAULT FALSE",
+            # Scope-тройник + федеративный линк (ddl/009 — CHECK-инварианты)
+            "scope": "TEXT NOT NULL DEFAULT 'user'",
+            "domain_id": "UUID REFERENCES auth.domains(id) ON DELETE RESTRICT",
+            "owner_id": "UUID REFERENCES auth.users(id) ON DELETE RESTRICT",
+            "link_id": "UUID REFERENCES auth.domain_links(id) ON DELETE RESTRICT",
             "created_at": "TIMESTAMPTZ DEFAULT NOW()",
             "updated_at": "TIMESTAMPTZ DEFAULT NOW()",
         },

@@ -41,6 +41,25 @@ AUTH_CORE_SCHEMA: dict[str, list[dict[str, Any]]] = {
         {"name": "ui:windows", "description": "Сохранение размеров окон своего интерфейса"},
         # === system ===
         {"name": "system:force_delete", "description": "Принудительное удаление любых данных (только для system_admin)"},
+        # === domains (scope-модель, Часть 2) ===
+        {"name": "domains:create", "description": "Создание доменов-тенантов"},
+        {"name": "domains:read", "description": "Просмотр доменов и их конфигурации"},
+        {"name": "domains:update", "description": "Обновление доменов (имя, display_name)"},
+        {"name": "domains:delete", "description": "Удаление доменов"},
+        # === domain (внутри конкретного домена; enforcement — check_permission_in_domain) ===
+        {"name": "domain:admin", "description": "Администрирование своего домена"},
+        {"name": "domain:users_invite", "description": "Приглашение пользователей в домен"},
+        {"name": "domain:users_remove", "description": "Исключение пользователей из домена"},
+        {"name": "domain:groups_create", "description": "Создание групп в домене"},
+        {"name": "domain:groups_manage", "description": "Управление группами домена и составом"},
+        {"name": "domain:providers_manage", "description": "Управление LLM-провайдерами домена"},
+        {"name": "domain:agents_manage", "description": "Управление агентами домена"},
+        {"name": "domain:share", "description": "Расшаривание ресурсов домена соседям по федерации"},
+        {"name": "domain:identity_configure", "description": "Настройка способа входа домена (identity_kind)"},
+        # === federation (междоменные линки) ===
+        {"name": "federation:propose", "description": "Предложение федеративного линка доменам"},
+        {"name": "federation:approve", "description": "Подтверждение федеративного линка (handshake)"},
+        {"name": "federation:revoke", "description": "Отзыв федеративного линка"},
     ],
     "roles": [
         {
@@ -62,6 +81,43 @@ AUTH_CORE_SCHEMA: dict[str, list[dict[str, Any]]] = {
             "name": "role_manager",
             "description": "Менеджер ролей — управление ролями и назначение разрешений",
             "permissions": ["roles:*", "profile:self", "ui:windows"],
+        },
+        # ── Scope-модель (Часть 2): каркасы-записи; enforcement доменных
+        # прав — через role_permissions + check_permission_in_domain,
+        # существующие llm/auth-роли не затрагиваются.
+        {
+            "name": "domain_owner",
+            "description": "Владелец домена-тенанта: полный контроль над доменом и федерацией",
+            "permissions": [
+                "domains:read", "domains:update", "domains:delete",
+                "domain:*", "federation:*", "profile:self", "ui:windows",
+            ],
+        },
+        {
+            "name": "domain_admin",
+            "description": "Администратор домена: пользователи, группы, агенты — без федерации",
+            "permissions": [
+                "domains:read",
+                "domain:admin", "domain:users_invite", "domain:users_remove",
+                "domain:groups_create", "domain:groups_manage",
+                "domain:agents_manage", "domain:identity_configure",
+                "profile:self", "ui:windows",
+            ],
+        },
+        {
+            "name": "domain_member",
+            "description": "Участник домена: базовый доступ к системе",
+            "permissions": ["profile:self", "ui:windows"],
+        },
+        {
+            "name": "group_creator",
+            "description": "Создание групп в домене (узкая делегация domain_admin)",
+            "permissions": ["domain:groups_create", "profile:self", "ui:windows"],
+        },
+        {
+            "name": "provider_sharer",
+            "description": "Расшаривание ресурсов домена по федерации",
+            "permissions": ["domain:share", "profile:self", "ui:windows"],
         },
     ],
 }

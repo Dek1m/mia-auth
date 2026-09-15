@@ -17,14 +17,18 @@ USERS_BIN = "ou-users"
 GROUPS_BIN = "ou-groups"
 SALES = "ou-sales"
 ALICE = "user-alice"
+BUILTIN_DOMAIN_ID = "domain-argenta"
 
 
 class FakeFolderRepo:
     def __init__(self) -> None:
+        # DDL-008: Argenta — домен-узел (kind='domain'); Root-узла в legacy-моках нет
         self.ous: list[dict[str, Any]] = [
             {
                 "id": ARGENTA, "parent_id": None, "name": "Argenta",
-                "kind": "folder", "is_system": True, "is_builtin": True, "sort_order": 0,
+                "kind": "domain", "is_system": True, "is_builtin": True,
+                "sort_order": 0, "domain_id": BUILTIN_DOMAIN_ID,
+                "domain_display_name": "Argenta",
             },
             {
                 "id": BUILTIN, "parent_id": ARGENTA, "name": "Built-in",
@@ -80,6 +84,23 @@ class FakeFolderRepo:
             None,
         )
 
+    async def get_root_ou(self) -> dict[str, Any] | None:
+        roots = [row for row in self.ous if row["parent_id"] is None]
+        return next(
+            (row for row in roots if row.get("kind") == "root"),
+            roots[0] if roots else None,
+        )
+
+    async def resolve_domain_ou(self, ou_id: str) -> dict[str, Any] | None:
+        by_id = {row["id"]: row for row in self.ous}
+        current = by_id.get(ou_id)
+        while current is not None:
+            if current.get("kind") == "domain":
+                return dict(current)
+            parent = current.get("parent_id")
+            current = by_id.get(parent) if parent else None
+        return None
+
     async def create_ou(self, parent_id: str, name: str) -> dict[str, Any]:
         for row in self.ous:
             if row.get("parent_id") == parent_id and row["name"] == name:
@@ -133,6 +154,11 @@ class FakeAuthRepo:
         self.users: dict[str, dict[str, Any]] = {}
         self.groups: dict[str, dict[str, Any]] = {}
 
+    async def get_domain_by_root_ou(self, root_ou_id: str) -> dict[str, Any] | None:
+        if str(root_ou_id) != ARGENTA:
+            return None
+        return {"id": BUILTIN_DOMAIN_ID, "name": "argenta", "kind": "builtin"}
+
     async def get_user(self, user_id: str) -> dict[str, Any] | None:
         return self.users.get(str(user_id))
 
@@ -143,13 +169,18 @@ class FakeAuthRepo:
         return None
 
     async def create_user(
-        self, username: str, password_hash: str, email: str | None = None,
+        self,
+        username: str,
+        password_hash: str,
+        email: str | None = None,
+        domain_id: str | None = None,
     ) -> dict[str, Any]:
         row = {
             "id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
             "username": username,
             "email": email,
             "password_hash": password_hash,
+            "domain_id": domain_id,
         }
         self.users[row["id"]] = row
         return row
@@ -161,13 +192,19 @@ class FakeAuthRepo:
         return None
 
     async def create_group(
-        self, name: str, description: str | None = None,
+        self,
+        name: str,
+        description: str | None = None,
+        domain_id: str | None = None,
+        scope: str | None = None,
     ) -> dict[str, Any]:
         row = {
             "id": "group-new",
             "name": name,
             "description": description,
             "is_builtin": False,
+            "domain_id": domain_id,
+            "scope": scope,
         }
         self.groups[row["id"]] = row
         return row

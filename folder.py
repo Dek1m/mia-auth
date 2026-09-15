@@ -73,7 +73,8 @@ class Folder:
         return repo
 
     def _assert_can_create_folder(self) -> None:
-        if self.kind in ("users_bin", "groups_bin"):
+        # 'root': под Root живут только домены (create_domain_subtree)
+        if self.kind in ("users_bin", "groups_bin", "root"):
             raise DomainError("Cannot create a folder here", "FORBIDDEN")
 
     def _assert_can_place_user(self) -> None:
@@ -118,6 +119,28 @@ class Folder:
     @property
     def sort_order(self) -> int:
         return int(self._require_data().get("sort_order") or 0)
+
+    @property
+    def linked_domain(self) -> dict[str, Any] | None:
+        """Привязка auth.domains к этому OU (LEFT JOIN в list_ous).
+
+        None для не-domain узлов и domain-узлов без строки в auth.domains.
+        """
+        row = self._require_data()
+        if row.get("kind") != "domain" or row.get("domain_id") is None:
+            return None
+        return {
+            "domain_id": str(row["domain_id"]),
+            "domain_display_name": row.get("domain_display_name"),
+        }
+
+    async def domain_id(self) -> str | None:
+        """auth.domains.id домена этой ветки; None — ветка вне домена."""
+        domain_ou = await self._domain._folders().resolve_domain_ou(self._uuid)
+        if domain_ou is None:
+            return None
+        row = await self._auth().get_domain_by_root_ou(str(domain_ou["id"]))
+        return str(row["id"]) if row else None
 
     async def children(self) -> list[Folder]:
         if self._children is not None:
@@ -169,7 +192,8 @@ class Folder:
     async def rename(self, name: str) -> None:
         cleaned = require_name(name)
         await self._ensure_loaded()
-        if self.is_system:
+        # Builtin-узлы (домены тенантов, их Built-in/bins) — каркас, не переименовывать
+        if self.is_system or self.is_builtin:
             raise DomainError("Cannot rename a system OU", "FORBIDDEN")
         try:
             updated = await self._domain._folders().rename_ou(self._uuid, cleaned)
@@ -185,7 +209,7 @@ class Folder:
 
     async def delete(self) -> None:
         await self._ensure_loaded()
-        if self.is_system:
+        if self.is_system or self.is_builtin:
             raise DomainError("Cannot delete a system OU", "FORBIDDEN")
         repo = self._domain._folders()
         if await repo.count_children(self._uuid):
@@ -210,6 +234,13 @@ class Folder:
         await self._ensure_loaded()
         self._assert_can_place_user()
         auth = self._auth()
+        # Юзер живёт в домене своей OU-ветки; вне домена (Root) — нельзя
+        did = await self.domain_id()
+        if did is None:
+            raise DomainError(
+                "Cannot create outside a domain", "FORBIDDEN",
+                human="Cannot create a user outside a domain",
+            )
         if await auth.get_user_by_username(cleaned):
             raise DomainError(
                 f"User {cleaned!r} exists",
@@ -220,6 +251,7 @@ class Folder:
             username=cleaned,
             password_hash=hash_password(password),
             email=email,
+            domain_id=did,
         )
         from modules.workspace.schemas import user_dbname
 
@@ -236,13 +268,22 @@ class Folder:
         await self._ensure_loaded()
         self._assert_can_place_group()
         auth = self._auth()
+        # Группа — scope-тройник ddl/009: доменная группа требует domain_id
+        did = await self.domain_id()
+        if did is None:
+            raise DomainError(
+                "Cannot create outside a domain", "FORBIDDEN",
+                human="Cannot create a group outside a domain",
+            )
         if await auth.find_group_by_name(cleaned):
             raise DomainError(
                 f"Group {cleaned!r} exists",
                 "DUPLICATE_NAME",
                 human="Group already exists",
             )
-        group = await auth.create_group(cleaned, description)
+        group = await auth.create_group(
+            cleaned, description, scope="domain", domain_id=did,
+        )
         await self._domain._folders().insert_group_ou(str(group["id"]), self._uuid)
         return self._domain.group(str(group["id"]))
 

@@ -8,13 +8,14 @@ from .folder import Folder
 from .folder_port import FolderRepository, FolderStoreUnbound
 from .group import Group
 from .role import Role
+from .tenant import Tenant
 from .user import User
 
 __all__ = ["Domain"]
 
 
 class Domain:
-    """Каталог User/Group/Role/Folder. Folder-порт вешает admin через bind_folders."""
+    """Каталог User/Group/Role/Folder/Tenant. Folder-порт вешает admin через bind_folders."""
 
     def __init__(self, auth_repo: Any | None) -> None:
         self._auth_repo = auth_repo
@@ -28,6 +29,11 @@ class Domain:
             raise FolderStoreUnbound("FolderRepository is not bound")
         return self._folder_repo
 
+    def _require_auth_repo(self) -> Any:
+        if self._auth_repo is None:
+            raise DomainError("Auth not initialized", "VALIDATION")
+        return self._auth_repo
+
     def user(self, uuid: str) -> User:
         return User(uuid, self._auth_repo, domain=self)
 
@@ -39,6 +45,10 @@ class Domain:
 
     def folder(self, uuid: str) -> Folder:
         return Folder(uuid, self)
+
+    def tenant(self, uuid: str | None = None) -> Tenant:
+        """Тенант по UUID; без UUID — несохранённый, для Tenant.create()."""
+        return Tenant(uuid, self._auth_repo, domain=self)
 
     async def get_bin(self, kind: str) -> Folder:
         """Builtin Users/Groups по kind (users_bin / groups_bin)."""
@@ -99,6 +109,11 @@ class Domain:
         items = listed[0] if isinstance(listed, tuple) else listed
         return self._filter_named(items, search, self.role)
 
+    async def tenants(self, search: str | None = None) -> list[Tenant]:
+        """Домены-тенанты (по образцу users()/groups())."""
+        listed = await self._require_auth_repo().list_domains()
+        return self._filter_named(listed, search, lambda uid: self.tenant(uid))
+
     def _filter_named(
         self,
         items: list[dict[str, Any]],
@@ -143,7 +158,7 @@ class Domain:
         return result
 
     async def tree(self) -> Folder:
-        """Корень parent_id is None (имя Argenta); дети из памяти, не N+1."""
+        """Корень kind='root' (DDL-008); дети из памяти, не N+1."""
         repo = self._folders()
         ous = await repo.list_ous()
         users = await repo.list_user_bindings()
@@ -166,7 +181,9 @@ class Domain:
         roots = by_parent.get(None, [])
         if not roots:
             raise LookupError("Domain root OU is missing")
-        root_row = next((row for row in roots if row.get("name") == "Argenta"), roots[0])
+        # После DDL-008 корень — Root kind='root'; fallback roots[0] —
+        # legacy-сиды без Root-узла (тесты, БД до миграции)
+        root_row = next((row for row in roots if row.get("kind") == "root"), roots[0])
         return self._build_folder(root_row, by_parent, users_by, groups_by)
 
     def _build_folder(

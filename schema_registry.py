@@ -148,17 +148,17 @@ class AuthSchemaRegistry:
         return result
 
     def _seed_administrators_group(self) -> None:
-        """Идемпотентный сид группы Administrators (is_builtin=true)."""
+        """Идемпотентный сид builtin-групп (scope='system', ddl/009 shape)."""
         self._database.execute(
-            "INSERT INTO auth.groups (name, description, is_builtin) "
-            "VALUES (%s, %s, TRUE) "
+            "INSERT INTO auth.groups (name, description, is_builtin, scope) "
+            "VALUES (%s, %s, TRUE, 'system') "
             "ON CONFLICT (name) DO UPDATE SET is_builtin = TRUE",
             "Administrators",
             "Встроенная группа системных администраторов",
         )
         self._database.execute(
-            "INSERT INTO auth.groups (name, description, is_builtin) "
-            "VALUES (%s, %s, TRUE) "
+            "INSERT INTO auth.groups (name, description, is_builtin, scope) "
+            "VALUES (%s, %s, TRUE, 'system') "
             "ON CONFLICT (name) DO UPDATE SET is_builtin = TRUE",
             "Everyone",
             "All users of the system",
@@ -188,133 +188,6 @@ class AuthSchemaRegistry:
     ) -> dict[str, list[str]]:
         """Зарегистрировать permissions и роли модуля (async обёртка)."""
         return self.register_sync(module_name, schema, is_builtin)
-        roles = schema.get("roles", [])
-
-        # Предварительная валидация
-        self._validate_permissions(module_name, permissions)
-        self._validate_roles(module_name, roles, permissions)
-
-        result = {
-            "created_permissions": [],
-            "updated_permissions": [],
-            "created_roles": [],
-            "updated_roles": [],
-        }
-
-        # ── Permissions ───────────────────────────────────────
-        for perm in permissions:
-            name = perm["name"]
-            description = perm.get("description", "")
-
-            # Проверяем существование для определения created/updated
-            existing = await self._fetchrow(
-                "SELECT source_module FROM auth.permissions WHERE name = %s",
-                name,
-            )
-
-            # Cross-module conflict: permission принадлежит другому модулю
-            if existing is not None:
-                existing_module = existing["source_module"]
-                if existing_module and existing_module != module_name:
-                    raise ValueError(
-                        f"Permission '{name}' already belongs to module '{existing_module}'. "
-                        f"Module '{module_name}' cannot overwrite it."
-                    )
-
-            self._database.execute(
-                "INSERT INTO auth.permissions (name, description, is_builtin, source_module, updated_at) "
-                "VALUES (%s, %s, %s, %s, NOW()) "
-                "ON CONFLICT (name) DO UPDATE SET "
-                "description = EXCLUDED.description, "
-                "is_builtin = EXCLUDED.is_builtin, "
-                "source_module = EXCLUDED.source_module, "
-                "updated_at = NOW()",
-                name,
-                description,
-                is_builtin,
-                module_name,
-            )
-
-            if existing is None:
-                result["created_permissions"].append(name)
-            else:
-                result["updated_permissions"].append(name)
-
-        # ── Roles ─────────────────────────────────────────────
-        for role in roles:
-            name = role["name"]
-            description = role.get("description", "")
-            role_perms = role.get("permissions", [])
-
-            existing = await self._fetchrow(
-                "SELECT source_module FROM auth.roles WHERE name = %s",
-                name,
-            )
-
-            # Cross-module conflict: роль принадлежит другому модулю
-            if existing is not None:
-                existing_module = existing["source_module"]
-                if existing_module and existing_module != module_name:
-                    raise ValueError(
-                        f"Role '{name}' already belongs to module '{existing_module}'. "
-                        f"Module '{module_name}' cannot overwrite it."
-                    )
-
-            self._database.execute(
-                "INSERT INTO auth.roles (name, description, is_builtin, source_module, updated_at) "
-                "VALUES (%s, %s, %s, %s, NOW()) "
-                "ON CONFLICT (name) DO UPDATE SET "
-                "description = EXCLUDED.description, "
-                "is_builtin = EXCLUDED.is_builtin, "
-                "source_module = EXCLUDED.source_module, "
-                "updated_at = NOW()",
-                name,
-                description,
-                is_builtin,
-                module_name,
-            )
-
-            # Пересборка role_permissions: DELETE существующих + INSERT
-            role_row = await self._fetchrow(
-                "SELECT id FROM auth.roles WHERE name = %s",
-                name,
-            )
-            if role_row is not None:
-                role_id = role_row["id"]
-                self._database.execute(
-                    "DELETE FROM auth.role_permissions WHERE role_id = %s",
-                    role_id,
-                )
-                for perm_name in role_perms:
-                    perm_row = await self._fetchrow(
-                        "SELECT id FROM auth.permissions WHERE name = %s",
-                        perm_name,
-                    )
-                    if perm_row is not None:
-                        self._database.execute(
-                            "INSERT INTO auth.role_permissions (role_id, permission_id) "
-                            "VALUES (%s, %s) ON CONFLICT DO NOTHING",
-                            role_id,
-                            perm_row["id"],
-                        )
-
-            if existing is None:
-                result["created_roles"].append(name)
-            else:
-                result["updated_roles"].append(name)
-
-        if self._log is not None:
-            self._log.info(
-                "Auth schema registered",
-                extra={
-                    "module": module_name,
-                    "created_perms": len(result["created_permissions"]),
-                    "updated_perms": len(result["updated_permissions"]),
-                    "created_roles": len(result["created_roles"]),
-                    "updated_roles": len(result["updated_roles"]),
-                },
-            )
-        return result
 
     # ── Валидация ─────────────────────────────────────────────
 
